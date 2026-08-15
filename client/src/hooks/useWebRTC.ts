@@ -46,7 +46,7 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
       if (pc) {
         pc.close();
       }
-      pendingCandidates = [];
+      // DO NOT clear pendingCandidates here, as early candidates for the new offer might be queued.
       
       const newPc = new RTCPeerConnection({
         iceServers: [
@@ -75,6 +75,7 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
       });
 
       newPc.ontrack = (event) => {
+        console.log('Received remote track', event.streams[0]);
         setRemoteStream(event.streams[0]);
       };
 
@@ -100,7 +101,8 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
       const data = JSON.parse(event.data);
       
       if (data.type === 'PEER_JOINED' && data.participantId !== participantId) {
-        // New peer joined, rebuild connection and create offer
+        // New peer joined, clear stale candidates, rebuild connection and create offer
+        pendingCandidates = [];
         pc = createPeerConnection();
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -111,11 +113,11 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
           offer
         }));
       } else if (data.type === 'WEBRTC_OFFER' && data.participantId !== participantId) {
-        // Received offer, rebuild connection and create answer
+        // Received offer, rebuild connection (keep early candidates!) and create answer
         pc = createPeerConnection();
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
         
-        // Process any queued candidates
+        // Process any queued candidates that arrived before the offer
         for (const candidate of pendingCandidates) {
           await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
         }
@@ -132,7 +134,7 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
       } else if (data.type === 'WEBRTC_ANSWER' && data.participantId !== participantId) {
         if (pc) {
           await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-          // Process any queued candidates
+          // Process any queued candidates that arrived before the answer
           for (const candidate of pendingCandidates) {
             await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
           }
@@ -147,6 +149,7 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
         }
       } else if (data.type === 'PEER_LEFT' && data.participantId !== participantId) {
         setRemoteStream(null);
+        pendingCandidates = [];
         if (pc) {
           pc.close();
           pc = null;
