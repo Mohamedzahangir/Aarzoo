@@ -39,33 +39,49 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
   useEffect(() => {
     if (!ws || !sessionId || !localStream) return;
 
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    });
-    peerConnection.current = pc;
+    let pc: RTCPeerConnection | null = null;
 
-    localStream.getTracks().forEach(track => {
-      pc.addTrack(track, localStream);
-    });
-
-    pc.ontrack = (event) => {
-      setRemoteStream(event.streams[0]);
-    };
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        ws.send(JSON.stringify({
-          type: 'WEBRTC_ICE',
-          sessionId,
-          participantId,
-          candidate: event.candidate
-        }));
+    const createPeerConnection = () => {
+      if (pc) {
+        pc.close();
       }
+      
+      const newPc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+      
+      localStream.getTracks().forEach(track => {
+        newPc.addTrack(track, localStream);
+      });
+
+      newPc.ontrack = (event) => {
+        setRemoteStream(event.streams[0]);
+      };
+
+      newPc.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.send(JSON.stringify({
+            type: 'WEBRTC_ICE',
+            sessionId,
+            participantId,
+            candidate: event.candidate
+          }));
+        }
+      };
+
+      peerConnection.current = newPc;
+      return newPc;
     };
+
+    // Initialize connection ready for offers
+    pc = createPeerConnection();
 
     const handleMessage = async (event: MessageEvent) => {
       const data = JSON.parse(event.data);
+      
       if (data.type === 'PEER_JOINED' && data.participantId !== participantId) {
+        // New peer joined, rebuild connection and create offer
+        pc = createPeerConnection();
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         ws.send(JSON.stringify({
@@ -75,6 +91,8 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
           offer
         }));
       } else if (data.type === 'WEBRTC_OFFER' && data.participantId !== participantId) {
+        // Received offer, rebuild connection and create answer
+        pc = createPeerConnection();
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -85,11 +103,20 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
           answer
         }));
       } else if (data.type === 'WEBRTC_ANSWER' && data.participantId !== participantId) {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        if (pc) {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        }
       } else if (data.type === 'WEBRTC_ICE' && data.participantId !== participantId) {
-        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        if (pc && pc.remoteDescription) {
+          await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => console.error(e));
+        }
       } else if (data.type === 'PEER_LEFT' && data.participantId !== participantId) {
         setRemoteStream(null);
+        if (pc) {
+          pc.close();
+          pc = null;
+          peerConnection.current = null;
+        }
       }
     };
 
@@ -97,7 +124,9 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
 
     return () => {
       ws.removeEventListener('message', handleMessage);
-      pc.close();
+      if (pc) {
+        pc.close();
+      }
     };
   }, [ws, sessionId, participantId, localStream]);
 
