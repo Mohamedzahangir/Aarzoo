@@ -48,8 +48,7 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
 
     const pc = new RTCPeerConnection({
       iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:global.stun.twilio.com:3478' },
+        { urls: 'stun:stun.relay.metered.ca:80' },
         {
           urls: 'turn:global.relay.metered.ca:80',
           username: 'bccfab4c5208dda4f5970d61',
@@ -73,6 +72,7 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
       ]
     });
     peerConnection.current = pc;
+    let pendingCandidates: RTCIceCandidateInit[] = [];
 
     localStream.getTracks().forEach(track => {
       pc.addTrack(track, localStream);
@@ -112,6 +112,12 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
         }));
       } else if (data.type === 'WEBRTC_OFFER' && data.participantId !== participantId) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        
+        for (const candidate of pendingCandidates) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+        }
+        pendingCandidates = [];
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         ws.send(JSON.stringify({
@@ -122,12 +128,19 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
         }));
       } else if (data.type === 'WEBRTC_ANSWER' && data.participantId !== participantId) {
         await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        for (const candidate of pendingCandidates) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+        }
+        pendingCandidates = [];
       } else if (data.type === 'WEBRTC_ICE' && data.participantId !== participantId) {
         if (pc.remoteDescription) {
           await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(console.error);
+        } else {
+          pendingCandidates.push(data.candidate);
         }
       } else if (data.type === 'PEER_LEFT' && data.participantId !== participantId) {
         setRemoteStream(null);
+        pendingCandidates = [];
       }
     };
 
