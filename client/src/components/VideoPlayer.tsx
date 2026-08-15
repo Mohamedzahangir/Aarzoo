@@ -23,7 +23,7 @@ export function VideoPlayer({ stream, muted = false, className = '' }: VideoPlay
       autoPlay
       playsInline
       muted={muted}
-      className={`object-cover ${className}`}
+      className={`object-contain bg-black/20 ${className}`}
     />
   );
 }
