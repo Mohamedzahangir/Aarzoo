@@ -11,22 +11,7 @@ interface WebRTCProps {
 export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: WebRTCProps) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [iceServers, setIceServers] = useState<RTCIceServer[] | null>(null);
   const peerConnection = useRef<RTCPeerConnection | null>(null);
-
-  useEffect(() => {
-    async function fetchIceServers() {
-      try {
-        const response = await fetch("https://zahangir.metered.live/api/v1/turn/credentials?apiKey=3608497fdac665c4c32ce1ce0c3147ebd7cf");
-        const servers = await response.json();
-        setIceServers(servers);
-      } catch (err) {
-        console.error("Failed to fetch TURN servers, falling back to STUN", err);
-        setIceServers([{ urls: 'stun:stun.l.google.com:19302' }]);
-      }
-    }
-    fetchIceServers();
-  }, []);
 
   useEffect(() => {
     async function setupLocalStream() {
@@ -59,10 +44,33 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
   }, [localStream, cameraOn, micOn]);
 
   useEffect(() => {
-    if (!ws || !sessionId || !localStream || !iceServers) return;
+    if (!ws || !sessionId || !localStream) return;
 
     const pc = new RTCPeerConnection({
-      iceServers: iceServers
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' },
+        {
+          urls: 'turn:global.relay.metered.ca:80',
+          username: 'bccfab4c5208dda4f5970d61',
+          credential: 'woyZUA3Cd0nbwoFt'
+        },
+        {
+          urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+          username: 'bccfab4c5208dda4f5970d61',
+          credential: 'woyZUA3Cd0nbwoFt'
+        },
+        {
+          urls: 'turn:global.relay.metered.ca:443',
+          username: 'bccfab4c5208dda4f5970d61',
+          credential: 'woyZUA3Cd0nbwoFt'
+        },
+        {
+          urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+          username: 'bccfab4c5208dda4f5970d61',
+          credential: 'woyZUA3Cd0nbwoFt'
+        }
+      ]
     });
     peerConnection.current = pc;
 
