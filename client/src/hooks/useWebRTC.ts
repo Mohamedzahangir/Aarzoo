@@ -40,14 +40,19 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
     if (!ws || !sessionId || !localStream) return;
 
     let pc: RTCPeerConnection | null = null;
+    let pendingCandidates: RTCIceCandidateInit[] = [];
 
     const createPeerConnection = () => {
       if (pc) {
         pc.close();
       }
+      pendingCandidates = [];
       
       const newPc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:global.stun.twilio.com:3478' }
+        ]
       });
       
       localStream.getTracks().forEach(track => {
@@ -94,6 +99,13 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
         // Received offer, rebuild connection and create answer
         pc = createPeerConnection();
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        
+        // Process any queued candidates
+        for (const candidate of pendingCandidates) {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+        }
+        pendingCandidates = [];
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         ws.send(JSON.stringify({
@@ -105,10 +117,18 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
       } else if (data.type === 'WEBRTC_ANSWER' && data.participantId !== participantId) {
         if (pc) {
           await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          // Process any queued candidates
+          for (const candidate of pendingCandidates) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+          }
+          pendingCandidates = [];
         }
       } else if (data.type === 'WEBRTC_ICE' && data.participantId !== participantId) {
         if (pc && pc.remoteDescription) {
           await pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(e => console.error(e));
+        } else {
+          // Remote description not set yet, queue the candidate
+          pendingCandidates.push(data.candidate);
         }
       } else if (data.type === 'PEER_LEFT' && data.participantId !== participantId) {
         setRemoteStream(null);
