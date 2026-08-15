@@ -11,7 +11,22 @@ interface WebRTCProps {
 export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: WebRTCProps) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [iceServers, setIceServers] = useState<RTCIceServer[] | null>(null);
   const peerConnection = useRef<RTCPeerConnection | null>(null);
+
+  useEffect(() => {
+    async function fetchIceServers() {
+      try {
+        const response = await fetch("https://zahangir.metered.live/api/v1/turn/credentials?apiKey=3608497fdac665c4c32ce1ce0c3147ebd7cf");
+        const servers = await response.json();
+        setIceServers(servers);
+      } catch (err) {
+        console.error("Failed to fetch TURN servers, falling back to STUN", err);
+        setIceServers([{ urls: 'stun:stun.l.google.com:19302' }]);
+      }
+    }
+    fetchIceServers();
+  }, []);
 
   useEffect(() => {
     async function setupLocalStream() {
@@ -44,13 +59,10 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
   }, [localStream, cameraOn, micOn]);
 
   useEffect(() => {
-    if (!ws || !sessionId || !localStream) return;
+    if (!ws || !sessionId || !localStream || !iceServers) return;
 
     const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:global.stun.twilio.com:3478' }
-      ]
+      iceServers: iceServers
     });
     peerConnection.current = pc;
 
