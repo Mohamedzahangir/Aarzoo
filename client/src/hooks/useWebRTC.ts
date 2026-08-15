@@ -16,7 +16,14 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
   useEffect(() => {
     async function setupLocalStream() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { 
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user'
+          }, 
+          audio: true 
+        });
         setLocalStream(stream);
       } catch (err) {
         console.error('Failed to get local media', err);
