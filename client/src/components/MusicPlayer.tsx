@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Pause, SkipForward, SkipBack, Volume2 } from 'lucide-react';
+import { Play, Pause } from 'lucide-react';
 import type { Song } from '../music/MusicProvider';
 
 interface MusicPlayerProps {

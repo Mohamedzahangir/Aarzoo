@@ -19,7 +19,7 @@ export class JioSaavnProvider implements MusicProvider {
     }
   }
 
-  async getSong(id: string): Promise<Song | null> {
+  async getSong(_id: string): Promise<Song | null> {
     // This API does not have a /songs/:id endpoint directly that matches this format easily, 
     // but the ID can usually be searched. For our usecase, we don't strictly need getSong yet
     // since we pass the whole Song object over WebSocket.

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, Play, Plus } from 'lucide-react';
+import { Search, Play } from 'lucide-react';
 import { musicProvider } from '../music/JioSaavnProvider';
 import type { Song } from '../music/MusicProvider';
 
