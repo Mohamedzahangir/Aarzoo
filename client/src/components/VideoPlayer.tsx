@@ -12,6 +12,7 @@ export function VideoPlayer({ stream, muted = false, className = '' }: VideoPlay
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(e => console.error("Video play failed:", e));
     }
   }, [stream]);
 

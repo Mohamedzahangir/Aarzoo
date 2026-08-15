@@ -75,8 +75,14 @@ export function useWebRTC({ ws, sessionId, participantId, cameraOn, micOn }: Web
       });
 
       newPc.ontrack = (event) => {
-        console.log('Received remote track', event.streams[0]);
-        setRemoteStream(event.streams[0]);
+        console.log('Received remote track', event);
+        if (event.streams && event.streams[0]) {
+          setRemoteStream(event.streams[0]);
+        } else {
+          // Fallback if streams array is empty (happens on some mobile browsers)
+          const stream = new MediaStream([event.track]);
+          setRemoteStream(stream);
+        }
       };
 
       newPc.onicecandidate = (event) => {
