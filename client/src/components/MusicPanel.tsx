@@ -33,7 +33,7 @@ export function MusicPanel({ ws, sessionId }: MusicPanelProps) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-surface">
+    <div className="flex flex-col h-full bg-transparent">
       <div className="p-4 border-b border-white/10">
         <form onSubmit={handleSearch} className="relative">
           <input
@@ -41,7 +41,7 @@ export function MusicPanel({ ws, sessionId }: MusicPanelProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search songs, artists..."
-            className="w-full bg-black/50 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm text-white focus:outline-none focus:border-primary/50 transition-colors"
+            className="glass-input w-full pl-10 pr-4 text-sm"
           />
           <Search className="w-4 h-4 text-gray-400 absolute left-4 top-1/2 transform -translate-y-1/2" />
         </form>
@@ -55,7 +55,7 @@ export function MusicPanel({ ws, sessionId }: MusicPanelProps) {
         ) : results.length > 0 ? (
           <div className="space-y-3">
             {results.map((song) => (
-              <div key={song.id} className="flex items-center space-x-3 p-2 hover:bg-white/5 rounded-lg transition-colors group">
+              <div key={song.id} className="flex items-center space-x-3 p-2 hover:bg-white/10 rounded-xl transition-colors group cursor-pointer" onClick={() => playSong(song)}>
                 <img src={song.artwork} alt={song.title} className="w-12 h-12 rounded object-cover" />
                 <div className="flex-1 min-w-0">
                   <p className="text-white text-sm font-medium truncate">{song.title}</p>

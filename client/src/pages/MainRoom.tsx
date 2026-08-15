@@ -61,13 +61,13 @@ export default function MainRoom() {
   }, [sessionId, displayName, navigate]);
 
   return (
-    <div className="min-h-screen bg-black flex flex-col md:flex-row overflow-hidden">
+    <div className="h-[100dvh] w-full flex flex-col md:flex-row overflow-hidden">
       {/* LEFT: Video Area */}
-      <div className="flex-1 relative flex flex-col bg-gray-900 border-r border-white/10">
+      <div className="flex-1 relative flex flex-col">
         
         {/* Header */}
         <div className="absolute top-0 left-0 right-0 p-6 z-20 flex justify-between items-center bg-gradient-to-b from-black/60 to-transparent">
-          <h1 className="text-xl font-bold tracking-widest text-white/90 drop-shadow-md">AARZOO</h1>
+          <h1 className="text-xl font-serif font-bold tracking-widest text-white/90 drop-shadow-md">AARZOO</h1>
           <div className="flex items-center space-x-2 bg-black/40 px-3 py-1.5 rounded-full backdrop-blur-sm">
             <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`} />
             <span className="text-sm text-gray-300 font-medium">
@@ -77,7 +77,7 @@ export default function MainRoom() {
         </div>
 
         {/* Remote Video */}
-        <div className="flex-1 w-full h-full bg-surface relative flex items-center justify-center overflow-hidden">
+        <div className="flex-1 w-full h-full relative flex items-center justify-center overflow-hidden">
           {remoteStream ? (
             <VideoPlayer stream={remoteStream} className="w-full h-full" />
           ) : (
@@ -130,7 +130,7 @@ export default function MainRoom() {
       </div>
 
       {/* RIGHT: Interaction Panel */}
-      <div className="w-full md:w-96 flex flex-col bg-surface border-l border-white/5 h-[50vh] md:h-screen">
+      <div className="w-full md:w-96 flex flex-col glass-panel h-[50dvh] md:h-[100dvh] border-0 md:border-l border-white/20 z-10">
         {/* Tabs */}
         <div className="flex border-b border-white/10 p-2 shrink-0">
           <button 

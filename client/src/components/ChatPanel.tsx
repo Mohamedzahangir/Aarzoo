@@ -59,7 +59,7 @@ export function ChatPanel({ ws, sessionId, participantId }: ChatPanelProps) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-surface">
+    <div className="flex flex-col h-full bg-transparent">
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 ? (
           <div className="h-full flex items-center justify-center text-center text-gray-500 py-10">
@@ -70,7 +70,7 @@ export function ChatPanel({ ws, sessionId, participantId }: ChatPanelProps) {
             const isMe = msg.participantId === participantId;
             return (
               <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] rounded-2xl px-4 py-2 ${isMe ? 'bg-primary text-white rounded-br-none' : 'bg-white/10 text-white rounded-bl-none'}`}>
+                <div className={`max-w-[80%] backdrop-blur-md border border-white/10 rounded-2xl px-4 py-2 shadow-md ${isMe ? 'bg-primary/50 text-white rounded-br-none' : 'bg-white/10 text-white rounded-bl-none'}`}>
                   <p className="text-sm">{msg.text}</p>
                 </div>
               </div>
@@ -80,14 +80,14 @@ export function ChatPanel({ ws, sessionId, participantId }: ChatPanelProps) {
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="p-4 border-t border-white/10 bg-surface">
+      <div className="p-4 border-t border-white/10 bg-transparent">
         <form onSubmit={sendMessage}>
           <input 
             type="text" 
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             placeholder="Send a temporary message..."
-            className="w-full bg-black/50 border border-white/10 rounded-full px-4 py-3 text-sm text-white focus:outline-none focus:border-primary/50 transition-colors"
+            className="glass-input w-full rounded-full text-sm py-3 px-5"
           />
         </form>
       </div>

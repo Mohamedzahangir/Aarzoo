@@ -5,27 +5,13 @@ export default function LandingPage() {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center relative overflow-hidden">
-      {/* Abstract Background Animation */}
-      <div className="absolute inset-0 flex items-center justify-center opacity-30">
-        <motion.div 
-          animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
-          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-          className="w-96 h-96 bg-primary/20 rounded-full blur-3xl absolute -left-20"
-        />
-        <motion.div 
-          animate={{ scale: [1, 1.5, 1], opacity: [0.3, 0.5, 0.3] }}
-          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 2 }}
-          className="w-96 h-96 bg-secondary/20 rounded-full blur-3xl absolute -right-20"
-        />
-      </div>
-
-      <div className="z-10 text-center max-w-2xl px-6">
+    <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
+      <div className="z-10 text-center max-w-2xl p-10 md:p-16 rounded-[2.5rem] mx-6">
         <motion.h1 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8 }}
-          className="text-6xl md:text-7xl font-bold tracking-tight mb-6"
+          className="text-6xl md:text-7xl font-serif font-bold tracking-tight mb-6 text-white drop-shadow-lg"
         >
           AARZOO
         </motion.h1>
@@ -34,7 +20,7 @@ export default function LandingPage() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.8, delay: 0.3 }}
-          className="space-y-2 mb-12 text-xl md:text-2xl font-light text-gray-300"
+          className="space-y-2 mb-10 text-xl md:text-2xl font-light text-white/90 drop-shadow-md"
         >
           <p>One moment.</p>
           <p>Two places.</p>
@@ -44,7 +30,7 @@ export default function LandingPage() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.8, delay: 0.6 }}
-          className="text-gray-400 mb-12"
+          className="text-white/80 mb-12 drop-shadow"
         >
           Stay close, even when you're far apart.
         </motion.p>
@@ -54,7 +40,7 @@ export default function LandingPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, delay: 0.9 }}
           onClick={() => navigate('/create')}
-          className="px-8 py-4 bg-white/10 hover:bg-white/20 border border-white/20 rounded-full backdrop-blur-md transition-all text-white font-medium hover:scale-105 active:scale-95"
+          className="px-10 py-4 glass-button w-full sm:w-auto mx-auto font-medium shadow-lg hover:scale-105 active:scale-95"
         >
           Create an Aarzoo
         </motion.button>

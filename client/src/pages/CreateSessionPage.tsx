@@ -76,8 +76,8 @@ export default function CreateSessionPage() {
   }, [sessionId, navigate]);
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center relative">
-      <div className="z-10 w-full max-w-md p-8 bg-surface/50 border border-white/10 rounded-2xl backdrop-blur-xl text-center">
+    <div className="min-h-screen flex flex-col items-center justify-center relative px-4">
+      <div className="z-10 w-full max-w-md p-8 glass-panel rounded-[2rem] text-center">
         {loading ? (
           <div className="flex flex-col items-center space-y-4">
             <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -100,8 +100,8 @@ export default function CreateSessionPage() {
             transition={{ duration: 0.5 }}
             className="flex flex-col items-center"
           >
-            <h2 className="text-2xl font-medium mb-2 text-rose-100">Your Aarzoo is ready ❤️</h2>
-            <p className="text-gray-400 mb-8 text-sm">Share this link with your person.</p>
+            <h2 className="text-2xl font-medium mb-2 text-white drop-shadow-md">Your Aarzoo is ready</h2>
+            <p className="text-white/80 mb-8 text-sm drop-shadow">Share this link with your person.</p>
             
             <div className="w-full bg-black/40 rounded-lg p-3 flex items-center justify-between border border-white/5 mb-6">
               <span className="text-sm truncate text-gray-300 mr-4 font-mono">{inviteLink}</span>
@@ -117,7 +117,7 @@ export default function CreateSessionPage() {
             <div className="flex space-x-4 w-full mb-8">
               <button 
                 onClick={handleShare}
-                className="flex-1 flex items-center justify-center space-x-2 bg-primary/20 hover:bg-primary/30 text-primary-100 py-3 rounded-xl transition-colors border border-primary/30"
+                className="glass-button w-full flex-1 bg-white/20 hover:bg-white/30 text-white font-medium hover:scale-105 active:scale-95"
               >
                 <Share2 className="w-4 h-4" />
                 <span>Share Link</span>

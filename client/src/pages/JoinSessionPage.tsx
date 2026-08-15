@@ -42,8 +42,8 @@ export default function JoinSessionPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center relative">
-      <div className="z-10 w-full max-w-md p-8 bg-surface/80 border border-white/10 rounded-2xl backdrop-blur-xl text-center shadow-2xl">
+    <div className="min-h-screen flex flex-col items-center justify-center relative px-4">
+      <div className="z-10 w-full max-w-md p-10 glass-panel rounded-[2rem] text-center">
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -62,7 +62,7 @@ export default function JoinSessionPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Enter your name"
-                className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-center text-white focus:outline-none focus:border-primary/50 transition-colors"
+                className="glass-input w-full text-center"
                 autoFocus
                 maxLength={20}
                 required
@@ -72,9 +72,9 @@ export default function JoinSessionPage() {
             <button 
               type="submit"
               disabled={!name.trim() || joining}
-              className="w-full bg-primary hover:bg-rose-600 disabled:opacity-50 disabled:hover:bg-primary text-white rounded-xl py-3 font-medium transition-all"
+              className="glass-button w-full shadow-lg hover:scale-105 active:scale-95 disabled:hover:scale-100 disabled:opacity-50"
             >
-              {joining ? 'Joining...' : 'Join Aarzoo ❤️'}
+              {joining ? 'Joining...' : 'Join Aarzoo'}
             </button>
           </form>
         </motion.div>

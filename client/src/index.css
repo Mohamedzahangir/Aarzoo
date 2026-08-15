@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Lato:wght@300;400;700&display=swap');
 @import "tailwindcss";
 
 @theme {
@@ -5,11 +6,28 @@
   --color-surface: #171717;
   --color-primary: #e11d48;
   --color-secondary: #4f46e5;
-  --font-sans: 'Inter', sans-serif;
+  --font-sans: 'Lato', sans-serif;
+  --font-serif: 'Playfair Display', serif;
 }
 
-@layer base {
-  body {
-    @apply bg-background text-white antialiased;
+body {
+  @apply text-white antialiased;
+}
+
+html, body, #root {
+  min-height: 100vh;
+}
+
+@layer components {
+  .glass-panel {
+    @apply bg-black/50 backdrop-blur-sm border border-white/10 shadow-[0_8px_32px_0_rgba(0,0,0,0.6)];
+  }
+  
+  .glass-input {
+    @apply bg-black/60 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:bg-black/80 focus:border-primary/50 transition-colors placeholder:text-gray-400;
+  }
+  
+  .glass-button {
+    @apply flex items-center justify-center space-x-2 bg-black/40 hover:bg-black/60 text-white rounded-xl py-3 px-4 transition-colors border border-white/10 backdrop-blur-md;
   }
 }
