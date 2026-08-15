@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Copy, Share2, CheckCircle2 } from 'lucide-react';
+import { API_URL } from '../config';
 
 export default function CreateSessionPage() {
   const navigate = useNavigate();
@@ -12,7 +13,7 @@ export default function CreateSessionPage() {
 
   useEffect(() => {
     // Call our backend API to create a session
-    fetch('http://localhost:3001/api/sessions', {
+    fetch(`${API_URL}/sessions`, {
       method: 'POST',
     })
       .then(res => res.json())
@@ -60,7 +61,7 @@ export default function CreateSessionPage() {
     if (!sessionId) return;
     
     const interval = setInterval(() => {
-      fetch(`http://localhost:3001/api/sessions/${sessionId}`)
+      fetch(`${API_URL}/sessions/${sessionId}`)
         .then(res => res.json())
         .then(data => {
           // Since the creator hasn't joined the WS yet, the participant count will be 1 when the invitee joins.

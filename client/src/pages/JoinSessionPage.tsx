@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 
+import { API_URL } from '../config';
+
 export default function JoinSessionPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
@@ -15,7 +17,7 @@ export default function JoinSessionPage() {
     setJoining(true);
     
     // Check if session exists/full before navigating
-    fetch(`http://localhost:3001/api/sessions/${sessionId}`)
+    fetch(`${API_URL}/sessions/${sessionId}`)
       .then(res => {
         if (!res.ok) throw new Error('Session unavailable');
         return res.json();

@@ -7,6 +7,8 @@ import { ChatPanel } from '../components/ChatPanel';
 import { MusicPanel } from '../components/MusicPanel';
 import { MusicPlayer } from '../components/MusicPlayer';
 
+import { WS_URL } from '../config';
+
 export default function MainRoom() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const location = useLocation();
@@ -30,7 +32,7 @@ export default function MainRoom() {
   });
 
   useEffect(() => {
-    const websocket = new WebSocket('ws://localhost:3001');
+    const websocket = new WebSocket(WS_URL);
     
     websocket.onopen = () => {
       websocket.send(JSON.stringify({
