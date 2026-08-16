@@ -19,6 +19,8 @@ import {
   Music,
   Film,
   PhoneOff,
+  ShieldCheck,
+  RefreshCw,
 } from 'lucide-react';
 
 import { useWebRTC } from '../hooks/useWebRTC';
@@ -108,6 +110,9 @@ export default function MainRoom() {
     remoteStream,
     connectionState,
     iceConnectionState,
+    mediaState,
+    mediaError,
+    requestMedia,
   } = useWebRTC({
     ws,
     sessionId,
@@ -470,11 +475,75 @@ export default function MainRoom() {
   }
 
   // ============================================================
+  // MEDIA PERMISSION
+  // ============================================================
+
+  const showMediaPermission =
+    mediaState !== 'ready';
+
+  // ============================================================
   // UI
   // ============================================================
 
   return (
     <div className="h-[100dvh] w-full flex flex-col md:flex-row overflow-hidden">
+
+      {/* CAMERA + MICROPHONE PERMISSION */}
+
+      {showMediaPermission && (
+        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-xl p-6">
+          <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.06] shadow-2xl p-8 text-center">
+
+            <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-white/10 border border-white/10">
+              {mediaState === 'requesting' ? (
+                <RefreshCw className="h-7 w-7 text-white animate-spin" />
+              ) : (
+                <ShieldCheck className="h-7 w-7 text-white" />
+              )}
+            </div>
+
+            <h2 className="text-2xl font-serif font-semibold text-white">
+              {mediaState === 'error'
+                ? 'Camera & mic access needed'
+                : 'Ready to connect?'}
+            </h2>
+
+            <p className="mt-3 text-sm leading-6 text-gray-400">
+              {mediaState === 'error'
+                ? mediaError ||
+                'Please allow camera and microphone access to continue.'
+                : 'Aarzoo needs access to your camera and microphone for the video call.'}
+            </p>
+
+            {mediaState === 'error' && (
+              <div className="mt-4 rounded-xl bg-white/[0.04] border border-white/10 px-4 py-3 text-left text-xs text-gray-500">
+                If you previously blocked access, open your browser's site permissions,
+                allow Camera and Microphone, then try again.
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={mediaState === 'requesting'}
+              onClick={() => {
+                void requestMedia();
+              }}
+              className="mt-7 w-full rounded-2xl bg-white px-5 py-3.5 text-sm font-medium text-black transition hover:bg-gray-200 disabled:cursor-wait disabled:opacity-60"
+            >
+              {mediaState === 'requesting'
+                ? 'Requesting access...'
+                : mediaState === 'error'
+                  ? 'Try Again'
+                  : 'Allow Camera & Mic'}
+            </button>
+
+            <p className="mt-4 text-[11px] text-gray-600">
+              Your browser will show its native permission prompt.
+            </p>
+
+          </div>
+        </div>
+      )}
 
       {/* VIDEO AREA */}
 
@@ -492,8 +561,8 @@ export default function MainRoom() {
 
             <div
               className={`w-2 h-2 rounded-full ${connected
-                  ? 'bg-green-500'
-                  : 'bg-yellow-500 animate-pulse'
+                ? 'bg-green-500'
+                : 'bg-yellow-500 animate-pulse'
                 }`}
             />
 
@@ -587,6 +656,7 @@ export default function MainRoom() {
         <div className="absolute bottom-0 left-0 right-0 p-6 flex justify-center items-center space-x-6 bg-gradient-to-t from-black/80 to-transparent z-20">
 
           <button
+            disabled={!localStream}
             onClick={() =>
               setMicOn(
                 (value) =>
@@ -594,8 +664,8 @@ export default function MainRoom() {
               )
             }
             className={`p-4 rounded-full ${micOn
-                ? 'bg-white/10 text-white'
-                : 'bg-red-500 text-white'
+              ? 'bg-white/10 text-white'
+              : 'bg-red-500 text-white'
               }`}
           >
             {micOn ? (
@@ -606,6 +676,7 @@ export default function MainRoom() {
           </button>
 
           <button
+            disabled={!localStream}
             onClick={() =>
               setCameraOn(
                 (value) =>
@@ -613,8 +684,8 @@ export default function MainRoom() {
               )
             }
             className={`p-4 rounded-full ${cameraOn
-                ? 'bg-white/10 text-white'
-                : 'bg-red-500 text-white'
+              ? 'bg-white/10 text-white'
+              : 'bg-red-500 text-white'
               }`}
           >
             {cameraOn ? (
@@ -651,8 +722,8 @@ export default function MainRoom() {
               )
             }
             className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg ${activeTab === 'chat'
-                ? 'bg-white/10 text-white'
-                : 'text-gray-400'
+              ? 'bg-white/10 text-white'
+              : 'text-gray-400'
               }`}
           >
             <MessageCircle className="w-4 h-4" />
@@ -668,8 +739,8 @@ export default function MainRoom() {
               )
             }
             className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg ${activeTab === 'music'
-                ? 'bg-white/10 text-white'
-                : 'text-gray-400'
+              ? 'bg-white/10 text-white'
+              : 'text-gray-400'
               }`}
           >
             <Music className="w-4 h-4" />
@@ -685,8 +756,8 @@ export default function MainRoom() {
               )
             }
             className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg ${activeTab === 'watch'
-                ? 'bg-white/10 text-white'
-                : 'text-gray-400'
+              ? 'bg-white/10 text-white'
+              : 'text-gray-400'
               }`}
           >
             <Film className="w-4 h-4" />

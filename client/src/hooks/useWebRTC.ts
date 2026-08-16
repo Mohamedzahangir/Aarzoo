@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface WebRTCProps {
   ws: WebSocket | null;
@@ -44,6 +44,15 @@ export function useWebRTC({
   const [iceConnectionState, setIceConnectionState] =
     useState<RTCIceConnectionState>('new');
 
+  const [mediaState, setMediaState] =
+    useState<'idle' | 'requesting' | 'ready' | 'error'>('idle');
+
+  const [mediaError, setMediaError] =
+    useState<string | null>(null);
+
+  const localStreamRef =
+    useRef<MediaStream | null>(null);
+
   const peerConnection =
     useRef<RTCPeerConnection | null>(null);
 
@@ -61,893 +70,966 @@ export function useWebRTC({
   const remoteStreamRef =
     useRef<MediaStream | null>(null);
 
-  const makingOffer =
-    useRef(false);
-
-  const offerCreated =
-    useRef(false);
-
-  const ignoreOffer =
-    useRef(false);
-
-  const restartTimer =
-    useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const restartAttempts =
-    useRef(0);
-
-  // ============================================================
+  const  // ============================================================
   // LOCAL MEDIA
   // ============================================================
+  //
+  // Camera + microphone are NOT requested automatically.
+  // The room explicitly calls requestMedia() from the user's
+  // "Allow Camera & Mic" action.
+  //
 
-  useEffect(() => {
-    let mounted = true;
-    let stream: MediaStream | null = null;
+  const mediaRequestRef = useRef(false);
 
-    const startMedia = async () => {
-      try {
-        console.log('[WEBRTC] Requesting camera + microphone');
+  const requestMedia = useCallback(async () => {
+    if (localStreamRef.current) {
+      const existing = localStreamRef.current;
+      existing.getVideoTracks().forEach((track) => {
+        track.enabled = cameraOn;
+      });
+      existing.getAudioTracks().forEach((track) => {
+        track.enabled = micOn;
+      });
+      setMediaState('ready');
+      setMediaError(null);
+      return existing;
+    }
 
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-            facingMode: 'user',
-          },
-          audio: true,
-        });
+    if (mediaRequestRef.current) {
+      return null;
+    }
 
-        if (!mounted) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
+    mediaRequestRef.current = true;
+    setMediaState('requesting');
+    setMediaError(null);
 
-        stream.getVideoTracks().forEach((track) => {
-          track.enabled = cameraOn;
-        });
-
-        stream.getAudioTracks().forEach((track) => {
-          track.enabled = micOn;
-        });
-
-        setLocalStream(stream);
-
-        console.log('[WEBRTC] Local media ready');
-      } catch (error) {
-        console.error(
-          '[WEBRTC] getUserMedia failed:',
-          error
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error(
+          'Camera and microphone access is not supported by this browser.'
         );
       }
-    };
 
-    void startMedia();
+      console.log(
+        '[WEBRTC] Requesting camera + microphone from Aarzoo UI'
+      );
 
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: 'user',
+        },
+        audio: true,
+      });
+
+      stream.getVideoTracks().forEach((track) => {
+        track.enabled = cameraOn;
+      });
+
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = micOn;
+      });
+
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+      setMediaState('ready');
+      setMediaError(null);
+
+      console.log('[WEBRTC] Local media READY', {
+        videoTracks: stream.getVideoTracks().length,
+        audioTracks: stream.getAudioTracks().length,
+      });
+
+      return stream;
+    } catch (error) {
+      const name =
+        error instanceof DOMException ? error.name : 'UnknownError';
+
+      const message =
+        error instanceof Error ? error.message : String(error);
+
+      let friendly =
+        'Camera and microphone access could not be started.';
+
+      if (
+        name === 'NotAllowedError' ||
+        name === 'PermissionDeniedError'
+      ) {
+        friendly =
+          'Camera or microphone permission was denied. Please allow both permissions and try again.';
+      } else if (name === 'NotFoundError') {
+        friendly =
+          'No camera or microphone was found on this device.';
+      } else if (name === 'NotReadableError') {
+        friendly =
+          'The camera or microphone is being used by another app.';
+      } else if (name === 'SecurityError') {
+        friendly =
+          'The browser blocked camera or microphone access for this page.';
+      }
+
+      setMediaState('error');
+      setMediaError(friendly);
+
+      console.error('[WEBRTC] LOCAL MEDIA FAILED', {
+        name,
+        message,
+        constraint:
+          error instanceof DOMException
+            ? error.constraint
+            : undefined,
+      });
+
+      return null;
+    } finally {
+      mediaRequestRef.current = false;
+    }
+  }, [cameraOn, micOn]);
+
+  useEffect(() => {
     return () => {
-      mounted = false;
+      const stream = localStreamRef.current;
 
       if (stream) {
         stream.getTracks().forEach((track) => track.stop());
+        localStreamRef.current = null;
       }
     };
   }, []);
 
-  // ============================================================
-  // CAMERA / MIC
-  // ============================================================
-
-  useEffect(() => {
-    if (!localStream) return;
-
-    localStream.getVideoTracks().forEach((track) => {
-      track.enabled = cameraOn;
-    });
-
-    localStream.getAudioTracks().forEach((track) => {
-      track.enabled = micOn;
-    });
-  }, [localStream, cameraOn, micOn]);
-
-  // ============================================================
-  // WEBSOCKET SIGNALING
-  // ============================================================
-
-  useEffect(() => {
-    if (!ws || !sessionId) return;
-
-    const handleMessage = (event: MessageEvent) => {
-      try {
-        const data = JSON.parse(event.data) as SignalMessage;
-
-        if (
-          data.sessionId &&
-          data.sessionId !== sessionId
-        ) {
-          return;
-        }
-
-        if (
-          data.participantId &&
-          data.participantId === participantId
-        ) {
-          return;
-        }
-
-        if (
-          data.type !== 'WEBRTC_OFFER' &&
-          data.type !== 'WEBRTC_ANSWER' &&
-          data.type !== 'WEBRTC_ICE' &&
-          data.type !== 'PEER_LEFT' &&
-          data.type !== 'SESSION_ENDED'
-        ) {
-          return;
-        }
-
-        console.log(
-          '[WEBRTC] SIGNAL RECEIVED:',
-          data.type
+] getUserMedia failed: ',
+  error
         );
+}
+    };
 
-        if (processSignalRef.current) {
-          void processSignalRef.current(data);
-        } else {
-          pendingSignals.current.push(data);
-        }
+void startMedia();
+
+return () => {
+  mounted = false;
+
+  if (stream) {
+    stream.getTracks().forEach((track) => track.stop());
+  }
+};
+  }, []);
+
+// ============================================================
+// CAMERA / MIC
+// ============================================================
+
+useEffect(() => {
+  if (!localStream) return;
+
+  localStream.getVideoTracks().forEach((track) => {
+    track.enabled = cameraOn;
+  });
+
+  localStream.getAudioTracks().forEach((track) => {
+    track.enabled = micOn;
+  });
+}, [localStream, cameraOn, micOn]);
+
+// ============================================================
+// WEBSOCKET SIGNALING
+// ============================================================
+
+useEffect(() => {
+  if (!ws || !sessionId) return;
+
+  const handleMessage = (event: MessageEvent) => {
+    try {
+      const data = JSON.parse(event.data) as SignalMessage;
+
+      if (
+        data.sessionId &&
+        data.sessionId !== sessionId
+      ) {
+        return;
+      }
+
+      if (
+        data.participantId &&
+        data.participantId === participantId
+      ) {
+        return;
+      }
+
+      if (
+        data.type !== 'WEBRTC_OFFER' &&
+        data.type !== 'WEBRTC_ANSWER' &&
+        data.type !== 'WEBRTC_ICE' &&
+        data.type !== 'PEER_LEFT' &&
+        data.type !== 'SESSION_ENDED'
+      ) {
+        return;
+      }
+
+      console.log(
+        '[WEBRTC] SIGNAL RECEIVED:',
+        data.type
+      );
+
+      if (processSignalRef.current) {
+        void processSignalRef.current(data);
+      } else {
+        pendingSignals.current.push(data);
+      }
+    } catch (error) {
+      console.error(
+        '[WEBRTC] Failed to parse signaling message:',
+        error
+      );
+    }
+  };
+
+  ws.addEventListener('message', handleMessage);
+
+  return () => {
+    ws.removeEventListener('message', handleMessage);
+  };
+}, [ws, sessionId, participantId]);
+
+// ============================================================
+// PEER CONNECTION
+// ============================================================
+
+useEffect(() => {
+  if (
+    !ws ||
+    !sessionId ||
+    !localStream ||
+    !peerParticipantId
+  ) {
+    return;
+  }
+
+  console.log(
+    '[WEBRTC] Starting connection:',
+    peerParticipantId
+  );
+
+  const iceServers: RTCIceServer[] = [
+    {
+      urls: 'stun:stun.relay.metered.ca:80',
+    },
+  ];
+
+  if (TURN_USERNAME && TURN_CREDENTIAL) {
+    iceServers.push({
+      urls: [
+        'turn:global.relay.metered.ca:80',
+        'turn:global.relay.metered.ca:80?transport=tcp',
+        'turn:global.relay.metered.ca:443',
+        'turns:global.relay.metered.ca:443?transport=tcp',
+      ],
+      username: TURN_USERNAME,
+      credential: TURN_CREDENTIAL,
+    });
+  } else {
+    console.warn(
+      '[WEBRTC] TURN credentials missing; continuing with STUN/direct ICE.'
+    );
+  }
+
+  const pc = new RTCPeerConnection({
+    // Direct P2P when possible, TURN when direct connectivity fails.
+    iceTransportPolicy: 'all',
+    iceServers,
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require',
+  });
+
+  peerConnection.current = pc;
+  localStreamRef.current = localStream;
+
+  pendingCandidates.current = [];
+  remoteStreamRef.current = null;
+
+  makingOffer.current = false;
+  offerCreated.current = false;
+  ignoreOffer.current = false;
+  restartAttempts.current = 0;
+
+  setRemoteStream(null);
+  setConnectionState('new');
+  setIceConnectionState('new');
+
+  const isInitiator =
+    participantId < peerParticipantId;
+
+  const isPolite =
+    participantId > peerParticipantId;
+
+  console.log(
+    '[WEBRTC] PeerConnection created:',
+    {
+      local: participantId,
+      remote: peerParticipantId,
+      isInitiator,
+      isPolite,
+    }
+  );
+
+  // ==========================================================
+  // SEND SIGNAL
+  // ==========================================================
+
+  const sendSignal = (
+    message: SignalMessage
+  ) => {
+    if (ws.readyState !== WebSocket.OPEN) {
+      console.error(
+        '[WEBRTC] WebSocket not open'
+      );
+
+      return false;
+    }
+
+    try {
+      ws.send(JSON.stringify(message));
+
+      console.log(
+        '[WEBRTC] SIGNAL SENT:',
+        message.type
+      );
+
+      return true;
+    } catch (error) {
+      console.error(
+        '[WEBRTC] Failed to send signal:',
+        error
+      );
+
+      return false;
+    }
+  };
+
+  // ==========================================================
+  // LOCAL TRACKS
+  // ==========================================================
+
+  localStream.getTracks().forEach((track) => {
+    pc.addTrack(track, localStream);
+
+    console.log(
+      '[WEBRTC] Added local track:',
+      track.kind
+    );
+  });
+
+  // ==========================================================
+  // REMOTE TRACK
+  // ==========================================================
+
+  pc.ontrack = (event) => {
+    console.log(
+      '[WEBRTC] REMOTE TRACK RECEIVED:',
+      event.track.kind
+    );
+
+    if (event.streams?.[0]) {
+      remoteStreamRef.current =
+        event.streams[0];
+
+      setRemoteStream(
+        event.streams[0]
+      );
+
+      return;
+    }
+
+    if (!remoteStreamRef.current) {
+      remoteStreamRef.current =
+        new MediaStream();
+    }
+
+    if (
+      !remoteStreamRef.current
+        .getTracks()
+        .some(
+          (track) =>
+            track.id === event.track.id
+        )
+    ) {
+      remoteStreamRef.current.addTrack(
+        event.track
+      );
+    }
+
+    setRemoteStream(
+      remoteStreamRef.current
+    );
+  };
+
+  // ==========================================================
+  // ICE
+  // ==========================================================
+
+  pc.onicecandidate = (event) => {
+    if (!event.candidate) {
+      console.log(
+        '[WEBRTC] ICE gathering complete'
+      );
+
+      return;
+    }
+
+    console.log(
+      '[WEBRTC] LOCAL ICE:',
+      {
+        type: event.candidate.type,
+        protocol: event.candidate.protocol,
+      }
+    );
+
+    sendSignal({
+      type: 'WEBRTC_ICE',
+      sessionId,
+      participantId,
+      candidate:
+        event.candidate.toJSON(),
+    });
+  };
+
+  pc.onicecandidateerror = (event) => {
+    console.warn(
+      '[WEBRTC] ICE CANDIDATE ERROR:',
+      {
+        code: event.errorCode,
+        text: event.errorText,
+        url: event.url,
+      }
+    );
+  };
+
+  // ==========================================================
+  // ICE STATE
+  // ==========================================================
+
+  pc.oniceconnectionstatechange = () => {
+    console.log(
+      '[WEBRTC] ICE STATE:',
+      pc.iceConnectionState
+    );
+
+    setIceConnectionState(
+      pc.iceConnectionState
+    );
+
+    if (
+      pc.iceConnectionState ===
+      'connected' ||
+      pc.iceConnectionState ===
+      'completed'
+    ) {
+      restartAttempts.current = 0;
+    }
+
+    if (
+      pc.iceConnectionState ===
+      'failed' ||
+      pc.iceConnectionState ===
+      'disconnected'
+    ) {
+      /*
+       * Mobile networks can temporarily change route.
+       *
+       * Give the network a little time before restarting.
+       */
+      if (!restartTimer.current) {
+        restartTimer.current =
+          setTimeout(async () => {
+            restartTimer.current = null;
+
+            if (
+              pc.signalingState !==
+              'closed'
+            ) {
+              console.log(
+                '[WEBRTC] Attempting ICE restart'
+              );
+
+              try {
+                restartAttempts.current += 1;
+
+                const offer =
+                  await pc.createOffer({
+                    iceRestart: true,
+                  });
+
+                await pc.setLocalDescription(
+                  offer
+                );
+
+                if (
+                  pc.localDescription
+                ) {
+                  sendSignal({
+                    type:
+                      'WEBRTC_OFFER',
+                    sessionId,
+                    participantId,
+                    offer:
+                      pc.localDescription.toJSON(),
+                  });
+                }
+              } catch (error) {
+                console.error(
+                  '[WEBRTC] ICE restart failed:',
+                  error
+                );
+              }
+            }
+          }, 1500);
+      }
+    }
+  };
+
+  // ==========================================================
+  // CONNECTION STATE
+  // ==========================================================
+
+  pc.onconnectionstatechange = () => {
+    console.log(
+      '[WEBRTC] CONNECTION STATE:',
+      pc.connectionState
+    );
+
+    setConnectionState(
+      pc.connectionState
+    );
+  };
+
+  pc.onsignalingstatechange = () => {
+    console.log(
+      '[WEBRTC] SIGNALING STATE:',
+      pc.signalingState
+    );
+  };
+
+  pc.onicegatheringstatechange = () => {
+    console.log(
+      '[WEBRTC] ICE GATHERING:',
+      pc.iceGatheringState
+    );
+  };
+
+  // ==========================================================
+  // FLUSH ICE
+  // ==========================================================
+
+  const flushCandidates = async () => {
+    if (!pc.remoteDescription) {
+      return;
+    }
+
+    const queued =
+      pendingCandidates.current.splice(
+        0
+      );
+
+    for (const candidate of queued) {
+      try {
+        await pc.addIceCandidate(
+          candidate
+        );
       } catch (error) {
         console.error(
-          '[WEBRTC] Failed to parse signaling message:',
+          '[WEBRTC] Failed queued ICE:',
           error
         );
       }
-    };
+    }
+  };
 
-    ws.addEventListener('message', handleMessage);
+  // ==========================================================
+  // CREATE OFFER
+  // ==========================================================
 
-    return () => {
-      ws.removeEventListener('message', handleMessage);
-    };
-  }, [ws, sessionId, participantId]);
+  const createOffer = async (
+    iceRestart = false
+  ) => {
+    if (!isInitiator && !iceRestart) {
+      return;
+    }
 
-  // ============================================================
-  // PEER CONNECTION
-  // ============================================================
+    if (makingOffer.current) {
+      return;
+    }
 
-  useEffect(() => {
     if (
-      !ws ||
-      !sessionId ||
-      !localStream ||
-      !peerParticipantId
+      pc.signalingState !==
+      'stable'
     ) {
       return;
     }
 
-    if (!TURN_USERNAME || !TURN_CREDENTIAL) {
-      console.error(
-        '[WEBRTC] TURN credentials missing'
+    try {
+      makingOffer.current = true;
+
+      console.log(
+        '[WEBRTC] CREATING OFFER',
+        { iceRestart }
       );
+
+      const offer =
+        await pc.createOffer(
+          iceRestart
+            ? { iceRestart: true }
+            : undefined
+        );
+
+      await pc.setLocalDescription(
+        offer
+      );
+
+      if (!pc.localDescription) {
+        return;
+      }
+
+      const sent =
+        sendSignal({
+          type: 'WEBRTC_OFFER',
+          sessionId,
+          participantId,
+          offer:
+            pc.localDescription.toJSON(),
+        });
+
+      if (sent) {
+        offerCreated.current =
+          true;
+
+        console.log(
+          '[WEBRTC] OFFER SENT'
+        );
+      }
+    } catch (error) {
+      console.error(
+        '[WEBRTC] OFFER FAILED:',
+        error
+      );
+    } finally {
+      makingOffer.current = false;
+    }
+  };
+
+  // ==========================================================
+  // SIGNAL PROCESSOR
+  // ==========================================================
+
+  const processSignal = async (
+    data: SignalMessage
+  ) => {
+    // --------------------------------------------------------
+    // SESSION ENDED
+    // --------------------------------------------------------
+
+    if (
+      data.type ===
+      'SESSION_ENDED'
+    ) {
+      console.log(
+        '[WEBRTC] SESSION ENDED'
+      );
+
       return;
     }
 
-    console.log(
-      '[WEBRTC] Starting connection:',
-      peerParticipantId
-    );
+    // --------------------------------------------------------
+    // PEER LEFT
+    // --------------------------------------------------------
 
-    const pc = new RTCPeerConnection({
-      /*
-       * ALWAYS use TURN.
-       *
-       * This intentionally prevents direct local/same-WiFi
-       * connection paths.
-       */
-      iceTransportPolicy: 'relay',
-
-      iceServers: [
-        {
-          urls: [
-            'turn:global.relay.metered.ca:80',
-            'turn:global.relay.metered.ca:80?transport=tcp',
-            'turn:global.relay.metered.ca:443',
-            'turns:global.relay.metered.ca:443?transport=tcp',
-          ],
-          username: TURN_USERNAME,
-          credential: TURN_CREDENTIAL,
-        },
-      ],
-
-      /*
-       * Helpful for mobile network changes.
-       */
-      bundlePolicy: 'max-bundle',
-      rtcpMuxPolicy: 'require',
-    });
-
-    peerConnection.current = pc;
-
-    pendingCandidates.current = [];
-    remoteStreamRef.current = null;
-
-    makingOffer.current = false;
-    offerCreated.current = false;
-    ignoreOffer.current = false;
-    restartAttempts.current = 0;
-
-    setRemoteStream(null);
-    setConnectionState('new');
-    setIceConnectionState('new');
-
-    const isInitiator =
-      participantId < peerParticipantId;
-
-    const isPolite =
-      participantId > peerParticipantId;
-
-    console.log(
-      '[WEBRTC] PeerConnection created:',
-      {
-        local: participantId,
-        remote: peerParticipantId,
-        isInitiator,
-        isPolite,
-      }
-    );
-
-    // ==========================================================
-    // SEND SIGNAL
-    // ==========================================================
-
-    const sendSignal = (
-      message: SignalMessage
-    ) => {
-      if (ws.readyState !== WebSocket.OPEN) {
-        console.error(
-          '[WEBRTC] WebSocket not open'
-        );
-
-        return false;
-      }
-
-      try {
-        ws.send(JSON.stringify(message));
-
-        console.log(
-          '[WEBRTC] SIGNAL SENT:',
-          message.type
-        );
-
-        return true;
-      } catch (error) {
-        console.error(
-          '[WEBRTC] Failed to send signal:',
-          error
-        );
-
-        return false;
-      }
-    };
-
-    // ==========================================================
-    // LOCAL TRACKS
-    // ==========================================================
-
-    localStream.getTracks().forEach((track) => {
-      pc.addTrack(track, localStream);
-
+    if (
+      data.type ===
+      'PEER_LEFT'
+    ) {
       console.log(
-        '[WEBRTC] Added local track:',
-        track.kind
+        '[WEBRTC] PEER LEFT'
       );
-    });
 
-    // ==========================================================
-    // REMOTE TRACK
-    // ==========================================================
+      pendingCandidates.current = [];
+      pendingSignals.current = [];
 
-    pc.ontrack = (event) => {
+      return;
+    }
+
+    // --------------------------------------------------------
+    // OFFER
+    // --------------------------------------------------------
+
+    if (
+      data.type ===
+      'WEBRTC_OFFER' &&
+      data.offer
+    ) {
       console.log(
-        '[WEBRTC] REMOTE TRACK RECEIVED:',
-        event.track.kind
+        '[WEBRTC] PROCESSING OFFER'
       );
 
-      if (event.streams?.[0]) {
-        remoteStreamRef.current =
-          event.streams[0];
-
-        setRemoteStream(
-          event.streams[0]
-        );
-
-        return;
-      }
-
-      if (!remoteStreamRef.current) {
-        remoteStreamRef.current =
-          new MediaStream();
-      }
-
-      if (
-        !remoteStreamRef.current
-          .getTracks()
-          .some(
-            (track) =>
-              track.id === event.track.id
-          )
-      ) {
-        remoteStreamRef.current.addTrack(
-          event.track
-        );
-      }
-
-      setRemoteStream(
-        remoteStreamRef.current
-      );
-    };
-
-    // ==========================================================
-    // ICE
-    // ==========================================================
-
-    pc.onicecandidate = (event) => {
-      if (!event.candidate) {
-        console.log(
-          '[WEBRTC] ICE gathering complete'
-        );
-
-        return;
-      }
-
-      console.log(
-        '[WEBRTC] LOCAL ICE:',
-        {
-          type: event.candidate.type,
-          protocol: event.candidate.protocol,
-        }
-      );
-
-      sendSignal({
-        type: 'WEBRTC_ICE',
-        sessionId,
-        participantId,
-        candidate:
-          event.candidate.toJSON(),
-      });
-    };
-
-    pc.onicecandidateerror = (event) => {
-      console.error(
-        '[WEBRTC] ICE ERROR:',
-        {
-          code: event.errorCode,
-          text: event.errorText,
-          url: event.url,
-        }
-      );
-    };
-
-    // ==========================================================
-    // ICE STATE
-    // ==========================================================
-
-    pc.oniceconnectionstatechange = () => {
-      console.log(
-        '[WEBRTC] ICE STATE:',
-        pc.iceConnectionState
-      );
-
-      setIceConnectionState(
-        pc.iceConnectionState
-      );
-
-      if (
-        pc.iceConnectionState ===
-        'connected' ||
-        pc.iceConnectionState ===
-        'completed'
-      ) {
-        restartAttempts.current = 0;
-      }
-
-      if (
-        pc.iceConnectionState ===
-        'failed' ||
-        pc.iceConnectionState ===
-        'disconnected'
-      ) {
-        /*
-         * Mobile networks can temporarily change route.
-         *
-         * Give the network a little time before restarting.
-         */
-        if (!restartTimer.current) {
-          restartTimer.current =
-            setTimeout(async () => {
-              restartTimer.current = null;
-
-              if (
-                pc.signalingState !==
-                'closed'
-              ) {
-                console.log(
-                  '[WEBRTC] Attempting ICE restart'
-                );
-
-                try {
-                  restartAttempts.current += 1;
-
-                  const offer =
-                    await pc.createOffer({
-                      iceRestart: true,
-                    });
-
-                  await pc.setLocalDescription(
-                    offer
-                  );
-
-                  if (
-                    pc.localDescription
-                  ) {
-                    sendSignal({
-                      type:
-                        'WEBRTC_OFFER',
-                      sessionId,
-                      participantId,
-                      offer:
-                        pc.localDescription.toJSON(),
-                    });
-                  }
-                } catch (error) {
-                  console.error(
-                    '[WEBRTC] ICE restart failed:',
-                    error
-                  );
-                }
-              }
-            }, 1500);
-        }
-      }
-    };
-
-    // ==========================================================
-    // CONNECTION STATE
-    // ==========================================================
-
-    pc.onconnectionstatechange = () => {
-      console.log(
-        '[WEBRTC] CONNECTION STATE:',
-        pc.connectionState
-      );
-
-      setConnectionState(
-        pc.connectionState
-      );
-    };
-
-    pc.onsignalingstatechange = () => {
-      console.log(
-        '[WEBRTC] SIGNALING STATE:',
-        pc.signalingState
-      );
-    };
-
-    pc.onicegatheringstatechange = () => {
-      console.log(
-        '[WEBRTC] ICE GATHERING:',
-        pc.iceGatheringState
-      );
-    };
-
-    // ==========================================================
-    // FLUSH ICE
-    // ==========================================================
-
-    const flushCandidates = async () => {
-      if (!pc.remoteDescription) {
-        return;
-      }
-
-      const queued =
-        pendingCandidates.current.splice(
-          0
-        );
-
-      for (const candidate of queued) {
-        try {
-          await pc.addIceCandidate(
-            candidate
-          );
-        } catch (error) {
-          console.error(
-            '[WEBRTC] Failed queued ICE:',
-            error
-          );
-        }
-      }
-    };
-
-    // ==========================================================
-    // CREATE OFFER
-    // ==========================================================
-
-    const createOffer = async (
-      iceRestart = false
-    ) => {
-      if (!isInitiator && !iceRestart) {
-        return;
-      }
-
-      if (makingOffer.current) {
-        return;
-      }
-
-      if (
+      const offerCollision =
+        makingOffer.current ||
         pc.signalingState !==
-        'stable'
+        'stable';
+
+      if (
+        offerCollision &&
+        !isPolite
       ) {
+        console.log(
+          '[WEBRTC] Ignoring offer collision'
+        );
+
+        ignoreOffer.current = true;
+
         return;
       }
 
       try {
-        makingOffer.current = true;
+        ignoreOffer.current = false;
 
-        console.log(
-          '[WEBRTC] CREATING OFFER',
-          { iceRestart }
+        if (
+          isPolite &&
+          pc.signalingState ===
+          'have-local-offer'
+        ) {
+          await pc.setLocalDescription({
+            type: 'rollback',
+          });
+        }
+
+        await pc.setRemoteDescription(
+          new RTCSessionDescription(
+            data.offer
+          )
         );
 
-        const offer =
-          await pc.createOffer(
-            iceRestart
-              ? { iceRestart: true }
-              : undefined
-          );
+        await flushCandidates();
+
+        const answer =
+          await pc.createAnswer();
 
         await pc.setLocalDescription(
-          offer
+          answer
         );
 
         if (!pc.localDescription) {
           return;
         }
 
-        const sent =
-          sendSignal({
-            type: 'WEBRTC_OFFER',
-            sessionId,
-            participantId,
-            offer:
-              pc.localDescription.toJSON(),
-          });
+        sendSignal({
+          type: 'WEBRTC_ANSWER',
+          sessionId,
+          participantId,
+          answer:
+            pc.localDescription.toJSON(),
+        });
 
-        if (sent) {
-          offerCreated.current =
-            true;
+        console.log(
+          '[WEBRTC] ANSWER SENT'
+        );
+      } catch (error) {
+        console.error(
+          '[WEBRTC] OFFER PROCESSING FAILED:',
+          error
+        );
+      }
 
-          console.log(
-            '[WEBRTC] OFFER SENT'
+      return;
+    }
+
+    // --------------------------------------------------------
+    // ANSWER
+    // --------------------------------------------------------
+
+    if (
+      data.type ===
+      'WEBRTC_ANSWER' &&
+      data.answer
+    ) {
+      if (
+        pc.signalingState !==
+        'have-local-offer'
+      ) {
+        console.warn(
+          '[WEBRTC] Ignoring unexpected ANSWER:',
+          pc.signalingState
+        );
+
+        return;
+      }
+
+      try {
+        await pc.setRemoteDescription(
+          new RTCSessionDescription(
+            data.answer
+          )
+        );
+
+        await flushCandidates();
+
+        console.log(
+          '[WEBRTC] ANSWER APPLIED'
+        );
+      } catch (error) {
+        console.error(
+          '[WEBRTC] ANSWER FAILED:',
+          error
+        );
+      }
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // ICE
+    // --------------------------------------------------------
+
+    if (
+      data.type ===
+      'WEBRTC_ICE' &&
+      data.candidate
+    ) {
+      if (ignoreOffer.current) {
+        return;
+      }
+
+      try {
+        if (
+          pc.remoteDescription
+        ) {
+          await pc.addIceCandidate(
+            data.candidate
+          );
+        } else {
+          pendingCandidates.current.push(
+            data.candidate
           );
         }
       } catch (error) {
         console.error(
-          '[WEBRTC] OFFER FAILED:',
+          '[WEBRTC] ICE FAILED:',
           error
         );
-      } finally {
-        makingOffer.current = false;
       }
-    };
+    }
+  };
 
-    // ==========================================================
-    // SIGNAL PROCESSOR
-    // ==========================================================
+  // ==========================================================
+  // REGISTER PROCESSOR
+  // ==========================================================
 
-    const processSignal = async (
-      data: SignalMessage
-    ) => {
-      // --------------------------------------------------------
-      // SESSION ENDED
-      // --------------------------------------------------------
+  processSignalRef.current =
+    processSignal;
 
-      if (
-        data.type ===
-        'SESSION_ENDED'
-      ) {
-        console.log(
-          '[WEBRTC] SESSION ENDED'
-        );
+  // ==========================================================
+  // PROCESS QUEUED SIGNALS
+  // ==========================================================
 
-        return;
-      }
+  const queuedSignals =
+    pendingSignals.current.splice(
+      0
+    );
 
-      // --------------------------------------------------------
-      // PEER LEFT
-      // --------------------------------------------------------
+  void (async () => {
+    for (
+      const signal of queuedSignals
+    ) {
+      await processSignal(
+        signal
+      );
+    }
+  })();
 
-      if (
-        data.type ===
-        'PEER_LEFT'
-      ) {
-        console.log(
-          '[WEBRTC] PEER LEFT'
-        );
+  // ==========================================================
+  // START CALL
+  // ==========================================================
 
-        pendingCandidates.current = [];
-        pendingSignals.current = [];
+  if (isInitiator) {
+    setTimeout(() => {
+      void createOffer(false);
+    }, 100);
+  }
 
-        return;
-      }
+  // ==========================================================
+  // CLEANUP
+  // ==========================================================
 
-      // --------------------------------------------------------
-      // OFFER
-      // --------------------------------------------------------
+  return () => {
+    console.log(
+      '[WEBRTC] Cleaning up'
+    );
 
-      if (
-        data.type ===
-        'WEBRTC_OFFER' &&
-        data.offer
-      ) {
-        console.log(
-          '[WEBRTC] PROCESSING OFFER'
-        );
-
-        const offerCollision =
-          makingOffer.current ||
-          pc.signalingState !==
-          'stable';
-
-        if (
-          offerCollision &&
-          !isPolite
-        ) {
-          console.log(
-            '[WEBRTC] Ignoring offer collision'
-          );
-
-          ignoreOffer.current = true;
-
-          return;
-        }
-
-        try {
-          ignoreOffer.current = false;
-
-          if (
-            isPolite &&
-            pc.signalingState ===
-            'have-local-offer'
-          ) {
-            await pc.setLocalDescription({
-              type: 'rollback',
-            });
-          }
-
-          await pc.setRemoteDescription(
-            new RTCSessionDescription(
-              data.offer
-            )
-          );
-
-          await flushCandidates();
-
-          const answer =
-            await pc.createAnswer();
-
-          await pc.setLocalDescription(
-            answer
-          );
-
-          if (!pc.localDescription) {
-            return;
-          }
-
-          sendSignal({
-            type: 'WEBRTC_ANSWER',
-            sessionId,
-            participantId,
-            answer:
-              pc.localDescription.toJSON(),
-          });
-
-          console.log(
-            '[WEBRTC] ANSWER SENT'
-          );
-        } catch (error) {
-          console.error(
-            '[WEBRTC] OFFER PROCESSING FAILED:',
-            error
-          );
-        }
-
-        return;
-      }
-
-      // --------------------------------------------------------
-      // ANSWER
-      // --------------------------------------------------------
-
-      if (
-        data.type ===
-        'WEBRTC_ANSWER' &&
-        data.answer
-      ) {
-        if (
-          pc.signalingState !==
-          'have-local-offer'
-        ) {
-          console.warn(
-            '[WEBRTC] Ignoring unexpected ANSWER:',
-            pc.signalingState
-          );
-
-          return;
-        }
-
-        try {
-          await pc.setRemoteDescription(
-            new RTCSessionDescription(
-              data.answer
-            )
-          );
-
-          await flushCandidates();
-
-          console.log(
-            '[WEBRTC] ANSWER APPLIED'
-          );
-        } catch (error) {
-          console.error(
-            '[WEBRTC] ANSWER FAILED:',
-            error
-          );
-        }
-
-        return;
-      }
-
-      // --------------------------------------------------------
-      // ICE
-      // --------------------------------------------------------
-
-      if (
-        data.type ===
-        'WEBRTC_ICE' &&
-        data.candidate
-      ) {
-        if (ignoreOffer.current) {
-          return;
-        }
-
-        try {
-          if (
-            pc.remoteDescription
-          ) {
-            await pc.addIceCandidate(
-              data.candidate
-            );
-          } else {
-            pendingCandidates.current.push(
-              data.candidate
-            );
-          }
-        } catch (error) {
-          console.error(
-            '[WEBRTC] ICE FAILED:',
-            error
-          );
-        }
-      }
-    };
-
-    // ==========================================================
-    // REGISTER PROCESSOR
-    // ==========================================================
-
-    processSignalRef.current =
-      processSignal;
-
-    // ==========================================================
-    // PROCESS QUEUED SIGNALS
-    // ==========================================================
-
-    const queuedSignals =
-      pendingSignals.current.splice(
-        0
+    if (
+      restartTimer.current
+    ) {
+      clearTimeout(
+        restartTimer.current
       );
 
-    void (async () => {
-      for (
-        const signal of queuedSignals
-      ) {
-        await processSignal(
-          signal
-        );
-      }
-    })();
-
-    // ==========================================================
-    // START CALL
-    // ==========================================================
-
-    if (isInitiator) {
-      setTimeout(() => {
-        void createOffer(false);
-      }, 100);
+      restartTimer.current =
+        null;
     }
 
-    // ==========================================================
-    // CLEANUP
-    // ==========================================================
-
-    return () => {
-      console.log(
-        '[WEBRTC] Cleaning up'
-      );
-
-      if (
-        restartTimer.current
-      ) {
-        clearTimeout(
-          restartTimer.current
-        );
-
-        restartTimer.current =
-          null;
-      }
-
-      if (
-        processSignalRef.current ===
-        processSignal
-      ) {
-        processSignalRef.current =
-          null;
-      }
-
-      pendingCandidates.current =
-        [];
-
-      pendingSignals.current =
-        [];
-
-      makingOffer.current =
-        false;
-
-      offerCreated.current =
-        false;
-
-      ignoreOffer.current =
-        false;
-
-      remoteStreamRef.current =
+    if (
+      processSignalRef.current ===
+      processSignal
+    ) {
+      processSignalRef.current =
         null;
+    }
 
-      setRemoteStream(null);
+    pendingCandidates.current =
+      [];
 
-      try {
-        pc.close();
-      } catch {
-        // Ignore cleanup error.
-      }
+    pendingSignals.current =
+      [];
 
-      if (
-        peerConnection.current ===
-        pc
-      ) {
-        peerConnection.current =
-          null;
-      }
-    };
-  }, [
-    ws,
-    sessionId,
-    participantId,
-    peerParticipantId,
-    localStream,
-  ]);
+    makingOffer.current =
+      false;
 
-  return {
-    localStream,
-    remoteStream,
-    connectionState,
-    iceConnectionState,
+    offerCreated.current =
+      false;
+
+    ignoreOffer.current =
+      false;
+
+    remoteStreamRef.current =
+      null;
+
+    setRemoteStream(null);
+
+    try {
+      pc.close();
+    } catch {
+      // Ignore cleanup error.
+    }
+
+    if (
+      peerConnection.current ===
+      pc
+    ) {
+      peerConnection.current =
+        null;
+    }
   };
+}, [
+  ws,
+  sessionId,
+  participantId,
+  peerParticipantId,
+  localStream,
+]);
+
+return {
+  localStream,
+  remoteStream,
+  connectionState,
+  iceConnectionState,
+  mediaState,
+  mediaError,
+  requestMedia,
+};
 }
