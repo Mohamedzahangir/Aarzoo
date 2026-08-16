@@ -200,10 +200,6 @@ export function useWebRTC({
       console.error('[WEBRTC] LOCAL MEDIA FAILED', {
         name,
         message,
-        constraint:
-          error instanceof DOMException
-            ? error.constraint
-            : undefined,
       });
 
       return null;
