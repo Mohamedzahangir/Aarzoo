@@ -44,11 +44,10 @@ interface SessionState {
 }
 
 export default function MainRoom() {
-  const {
-    sessionId,
-  } = useParams<{
-    sessionId: string;
-  }>();
+  const { sessionId } =
+    useParams<{
+      sessionId: string;
+    }>();
 
   const location =
     useLocation();
@@ -60,18 +59,13 @@ export default function MainRoom() {
     location.state?.displayName ||
     'Guest';
 
-  // ============================================================
-  // STABLE PARTICIPANT ID
-  // ============================================================
-
   const participantId =
     useRef(
       crypto.randomUUID()
     );
 
-  // ============================================================
-  // STATE
-  // ============================================================
+  const leavingRef =
+    useRef(false);
 
   const [
     connected,
@@ -109,10 +103,6 @@ export default function MainRoom() {
     setMicOn,
   ] = useState(true);
 
-  // ============================================================
-  // WEBRTC
-  // ============================================================
-
   const {
     localStream,
     remoteStream,
@@ -129,27 +119,100 @@ export default function MainRoom() {
   });
 
   // ============================================================
+  // GO HOME
+  // ============================================================
+
+  const goHome = () => {
+    if (leavingRef.current) {
+      return;
+    }
+
+    leavingRef.current = true;
+
+    // Stop local media.
+    if (localStream) {
+      localStream
+        .getTracks()
+        .forEach((track) =>
+          track.stop()
+        );
+    }
+
+    navigate('/', {
+      replace: true,
+    });
+  };
+
+  // ============================================================
+  // LEAVE SESSION
+  // ============================================================
+
+  const leaveSession = () => {
+    if (leavingRef.current) {
+      return;
+    }
+
+    leavingRef.current = true;
+
+    console.log(
+      '[ROOM] Leaving session'
+    );
+
+    if (
+      ws &&
+      ws.readyState ===
+      WebSocket.OPEN
+    ) {
+      try {
+        ws.send(
+          JSON.stringify({
+            type:
+              'SESSION_LEAVE',
+
+            sessionId,
+
+            participantId:
+              participantId.current,
+          })
+        );
+      } catch (error) {
+        console.error(
+          '[ROOM] Failed to send SESSION_LEAVE:',
+          error
+        );
+      }
+    }
+
+    if (localStream) {
+      localStream
+        .getTracks()
+        .forEach((track) =>
+          track.stop()
+        );
+    }
+
+    navigate('/', {
+      replace: true,
+    });
+  };
+
+  // ============================================================
   // WEBSOCKET
   // ============================================================
 
   useEffect(() => {
     if (!sessionId) {
+      navigate('/', {
+        replace: true,
+      });
+
       return;
     }
-
-    console.log(
-      '[ROOM] Creating WebSocket:',
-      WS_URL
-    );
 
     const websocket =
       new WebSocket(
         WS_URL
       );
-
-    // ----------------------------------------------------------
-    // MESSAGE HANDLER
-    // ----------------------------------------------------------
 
     const handleMessage = (
       event: MessageEvent
@@ -184,40 +247,18 @@ export default function MainRoom() {
             state?.participants ||
             {};
 
-          console.log(
-            '[ROOM] SESSION PARTICIPANTS:',
-            Object.keys(
-              participants
-            )
-          );
-
           const peer =
             Object.values(
               participants
             ).find(
-              (
-                participant
-              ) =>
+              (participant) =>
                 participant.participantId !==
                 participantId.current
             );
 
           if (peer) {
-            console.log(
-              '[ROOM] PEER FOUND FROM SESSION_STATE:',
-              peer.participantId
-            );
-
             setPeerParticipantId(
               peer.participantId
-            );
-          } else {
-            console.log(
-              '[ROOM] No peer yet'
-            );
-
-            setPeerParticipantId(
-              null
             );
           }
 
@@ -236,7 +277,7 @@ export default function MainRoom() {
           participantId.current
         ) {
           console.log(
-            '[ROOM] PEER_JOINED:',
+            '[ROOM] Peer joined:',
             data.participantId
           );
 
@@ -248,26 +289,39 @@ export default function MainRoom() {
         }
 
         // ======================================================
-        // PEER LEFT
+        // SESSION ENDED
+        //
+        // BOTH PEOPLE GO HOME.
         // ======================================================
 
         if (
           data.type ===
-          'PEER_LEFT' &&
-          data.participantId
+          'SESSION_ENDED'
         ) {
           console.log(
-            '[ROOM] PEER_LEFT:',
-            data.participantId
+            '[ROOM] SESSION ENDED - returning home'
           );
 
-          setPeerParticipantId(
-            (current) =>
-              current ===
-                data.participantId
-                ? null
-                : current
+          goHome();
+
+          return;
+        }
+
+        // ======================================================
+        // PEER LEFT
+        //
+        // ALSO RETURN HOME.
+        // ======================================================
+
+        if (
+          data.type ===
+          'PEER_LEFT'
+        ) {
+          console.log(
+            '[ROOM] PEER LEFT - returning home'
           );
+
+          goHome();
 
           return;
         }
@@ -290,9 +344,8 @@ export default function MainRoom() {
             'Session error'
           );
 
-          navigate('/');
+          goHome();
         }
-
       } catch (error) {
         console.error(
           '[ROOM] Invalid WebSocket message:',
@@ -306,17 +359,11 @@ export default function MainRoom() {
       handleMessage
     );
 
-    // ----------------------------------------------------------
-    // OPEN
-    // ----------------------------------------------------------
-
     websocket.onopen =
       () => {
         console.log(
           '[ROOM] WebSocket OPEN'
         );
-
-        setConnected(true);
 
         const joinMessage = {
           type:
@@ -330,21 +377,12 @@ export default function MainRoom() {
           displayName,
         };
 
-        console.log(
-          '[ROOM] Sending SESSION_JOIN:',
-          joinMessage
-        );
-
         websocket.send(
           JSON.stringify(
             joinMessage
           )
         );
       };
-
-    // ----------------------------------------------------------
-    // ERROR
-    // ----------------------------------------------------------
 
     websocket.onerror =
       (error) => {
@@ -354,49 +392,29 @@ export default function MainRoom() {
         );
       };
 
-    // ----------------------------------------------------------
-    // CLOSE
-    // ----------------------------------------------------------
-
     websocket.onclose =
       (event) => {
         console.log(
           '[ROOM] WebSocket CLOSED:',
-          {
-            code:
-              event.code,
-            reason:
-              event.reason,
-          }
+          event.code
         );
 
         setConnected(false);
-        setPeerParticipantId(
-          null
-        );
-      };
 
-    // ----------------------------------------------------------
-    // IMPORTANT
-    //
-    // Set WS immediately.
-    //
-    // The WebRTC hook's signaling listener will attach as soon
-    // as this state is updated and will queue early OFFER/ICE
-    // messages.
-    // ----------------------------------------------------------
+        /*
+         * If we didn't intentionally leave, the session
+         * disappeared unexpectedly.
+         */
+        if (
+          !leavingRef.current
+        ) {
+          goHome();
+        }
+      };
 
     setWs(websocket);
 
-    // ----------------------------------------------------------
-    // CLEANUP
-    // ----------------------------------------------------------
-
     return () => {
-      console.log(
-        '[ROOM] Cleaning up WebSocket'
-      );
-
       websocket.removeEventListener(
         'message',
         handleMessage
@@ -412,15 +430,10 @@ export default function MainRoom() {
       }
 
       setWs(null);
-      setPeerParticipantId(
-        null
-      );
-      setConnected(false);
     };
   }, [
     sessionId,
     displayName,
-    navigate,
   ]);
 
   // ============================================================
@@ -430,9 +443,7 @@ export default function MainRoom() {
   let videoStatus =
     'Waiting for your person...';
 
-  if (
-    !peerParticipantId
-  ) {
+  if (!peerParticipantId) {
     videoStatus =
       'Waiting for your person...';
   } else if (
@@ -452,7 +463,7 @@ export default function MainRoom() {
     'disconnected'
   ) {
     videoStatus =
-      'Video disconnected';
+      'Reconnecting...';
   } else {
     videoStatus =
       'Connecting video...';
@@ -465,9 +476,7 @@ export default function MainRoom() {
   return (
     <div className="h-[100dvh] w-full flex flex-col md:flex-row overflow-hidden">
 
-      {/* ======================================================
-          LEFT: VIDEO
-      ====================================================== */}
+      {/* VIDEO AREA */}
 
       <div className="flex-1 relative flex flex-col">
 
@@ -475,7 +484,7 @@ export default function MainRoom() {
 
         <div className="absolute top-0 left-0 right-0 p-6 z-20 flex justify-between items-center bg-gradient-to-b from-black/60 to-transparent">
 
-          <h1 className="text-xl font-serif font-bold tracking-widest text-white/90 drop-shadow-md">
+          <h1 className="text-xl font-serif font-bold tracking-widest text-white/90">
             AARZOO
           </h1>
 
@@ -488,7 +497,7 @@ export default function MainRoom() {
                 }`}
             />
 
-            <span className="text-sm text-gray-300 font-medium">
+            <span className="text-sm text-gray-300">
               {connected
                 ? 'Connected'
                 : 'Connecting...'}
@@ -498,9 +507,7 @@ export default function MainRoom() {
 
         </div>
 
-        {/* ====================================================
-            REMOTE VIDEO
-        ==================================================== */}
+        {/* REMOTE VIDEO */}
 
         <div className="flex-1 w-full h-full relative flex items-center justify-center overflow-hidden">
 
@@ -525,14 +532,12 @@ export default function MainRoom() {
                 <div className="mt-3 text-xs text-gray-500 space-y-1">
 
                   <p>
-                    WebRTC:
-                    {' '}
+                    WebRTC:{' '}
                     {connectionState}
                   </p>
 
                   <p>
-                    ICE:
-                    {' '}
+                    ICE:{' '}
                     {iceConnectionState}
                   </p>
 
@@ -545,19 +550,15 @@ export default function MainRoom() {
 
         </div>
 
-        {/* ====================================================
-            LOCAL VIDEO
-        ==================================================== */}
+        {/* LOCAL VIDEO */}
 
-        <div className="absolute bottom-40 md:bottom-28 right-6 w-24 h-36 md:w-40 md:h-60 bg-gray-800 rounded-2xl overflow-hidden shadow-2xl border border-white/20 flex items-center justify-center z-20 transition-all hover:scale-105">
+        <div className="absolute bottom-40 md:bottom-28 right-6 w-24 h-36 md:w-40 md:h-60 bg-gray-800 rounded-2xl overflow-hidden shadow-2xl border border-white/20 flex items-center justify-center z-20">
 
           {localStream &&
             cameraOn ? (
 
             <VideoPlayer
-              stream={
-                localStream
-              }
+              stream={localStream}
               muted
               className="w-full h-full transform -scale-x-100"
             />
@@ -576,115 +577,89 @@ export default function MainRoom() {
 
         </div>
 
-        {/* MUSIC PLAYER */}
-
         <MusicPlayer
           ws={ws}
           sessionId={sessionId}
         />
 
-        {/* ====================================================
-            CONTROLS
-        ==================================================== */}
+        {/* CONTROLS */}
 
         <div className="absolute bottom-0 left-0 right-0 p-6 flex justify-center items-center space-x-6 bg-gradient-to-t from-black/80 to-transparent z-20">
-
-          {/* MIC */}
 
           <button
             onClick={() =>
               setMicOn(
-                !micOn
+                (value) =>
+                  !value
               )
             }
-            className={`p-4 rounded-full backdrop-blur-md transition-all ${micOn
-                ? 'bg-white/10 hover:bg-white/20 text-white'
-                : 'bg-red-500/90 hover:bg-red-500 text-white'
+            className={`p-4 rounded-full ${micOn
+                ? 'bg-white/10 text-white'
+                : 'bg-red-500 text-white'
               }`}
           >
-
             {micOn ? (
               <Mic className="w-6 h-6" />
             ) : (
               <MicOff className="w-6 h-6" />
             )}
-
           </button>
-
-          {/* CAMERA */}
 
           <button
             onClick={() =>
               setCameraOn(
-                !cameraOn
+                (value) =>
+                  !value
               )
             }
-            className={`p-4 rounded-full backdrop-blur-md transition-all ${cameraOn
-                ? 'bg-white/10 hover:bg-white/20 text-white'
-                : 'bg-red-500/90 hover:bg-red-500 text-white'
+            className={`p-4 rounded-full ${cameraOn
+                ? 'bg-white/10 text-white'
+                : 'bg-red-500 text-white'
               }`}
           >
-
             {cameraOn ? (
               <Video className="w-6 h-6" />
             ) : (
               <VideoOff className="w-6 h-6" />
             )}
-
           </button>
 
-          {/* LEAVE */}
-
           <button
-            onClick={() =>
-              navigate('/')
+            onClick={
+              leaveSession
             }
-            className="p-4 rounded-full bg-red-600 hover:bg-red-700 transition-all hover:scale-105 text-white"
+            className="p-4 rounded-full bg-red-600 hover:bg-red-700 text-white"
             title="Leave Aarzoo"
           >
-
             <PhoneOff className="w-6 h-6" />
-
           </button>
 
         </div>
 
       </div>
 
-      {/* ======================================================
-          RIGHT PANEL
-      ====================================================== */}
+      {/* RIGHT PANEL */}
 
       <div className="w-full md:w-96 flex flex-col glass-panel h-[50dvh] md:h-[100dvh] border-0 md:border-l border-white/20 z-10">
 
-        {/* TABS */}
-
         <div className="flex border-b border-white/10 p-2 shrink-0">
 
-          {/* CHAT */}
-
           <button
             onClick={() =>
               setActiveTab(
                 'chat'
               )
             }
-            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg transition-colors ${activeTab ===
-                'chat'
-                ? 'bg-white/10 text-white shadow-sm'
-                : 'text-gray-400 hover:bg-white/5'
+            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg ${activeTab === 'chat'
+                ? 'bg-white/10 text-white'
+                : 'text-gray-400'
               }`}
           >
-
             <MessageCircle className="w-4 h-4" />
-
-            <span className="text-sm font-medium">
+            <span className="text-sm">
               Chat
             </span>
-
           </button>
-
-          {/* MUSIC */}
 
           <button
             onClick={() =>
@@ -692,22 +667,16 @@ export default function MainRoom() {
                 'music'
               )
             }
-            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg transition-colors ${activeTab ===
-                'music'
-                ? 'bg-white/10 text-white shadow-sm'
-                : 'text-gray-400 hover:bg-white/5'
+            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg ${activeTab === 'music'
+                ? 'bg-white/10 text-white'
+                : 'text-gray-400'
               }`}
           >
-
             <Music className="w-4 h-4" />
-
-            <span className="text-sm font-medium">
+            <span className="text-sm">
               Music
             </span>
-
           </button>
-
-          {/* WATCH */}
 
           <button
             onClick={() =>
@@ -715,66 +684,48 @@ export default function MainRoom() {
                 'watch'
               )
             }
-            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg transition-colors ${activeTab ===
-                'watch'
-                ? 'bg-white/10 text-white shadow-sm'
-                : 'text-gray-400 hover:bg-white/5'
+            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg ${activeTab === 'watch'
+                ? 'bg-white/10 text-white'
+                : 'text-gray-400'
               }`}
           >
-
             <Film className="w-4 h-4" />
-
-            <span className="text-sm font-medium">
+            <span className="text-sm">
               Watch
             </span>
-
           </button>
 
         </div>
-
-        {/* PANEL */}
 
         <div className="flex-1 overflow-hidden flex flex-col relative">
 
           {activeTab ===
             'chat' && (
-
               <ChatPanel
                 ws={ws}
-                sessionId={
-                  sessionId
-                }
+                sessionId={sessionId}
                 participantId={
                   participantId.current
                 }
               />
-
             )}
 
           {activeTab ===
             'music' && (
-
               <MusicPanel
                 ws={ws}
-                sessionId={
-                  sessionId
-                }
+                sessionId={sessionId}
               />
-
             )}
 
           {activeTab ===
             'watch' && (
-
               <div className="h-full flex items-center justify-center text-center text-gray-500 p-8">
-
                 <p className="text-sm">
                   Watch together
                   coming soon...
                 </p>
-
               </div>
-
             )}
 
         </div>
