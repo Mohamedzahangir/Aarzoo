@@ -1,125 +1,319 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
-import { Mic, MicOff, Video, VideoOff, MessageCircle, Music, Film, PhoneOff } from 'lucide-react';
+import {
+  Mic,
+  MicOff,
+  Video,
+  VideoOff,
+  MessageCircle,
+  Music,
+  Film,
+  PhoneOff,
+} from 'lucide-react';
+
 import { useWebRTC } from '../hooks/useWebRTC';
 import { VideoPlayer } from '../components/VideoPlayer';
 import { ChatPanel } from '../components/ChatPanel';
 import { MusicPanel } from '../components/MusicPanel';
 import { MusicPlayer } from '../components/MusicPlayer';
-
 import { WS_URL } from '../config';
+
+interface SessionState {
+  participants?: Record<
+    string,
+    {
+      participantId: string;
+      displayName?: string;
+    }
+  >;
+}
 
 export default function MainRoom() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
+
   const displayName = location.state?.displayName || 'Guest';
 
+  const participantId = useRef(
+    crypto.randomUUID()
+  );
+
   const [connected, setConnected] = useState(false);
-  const [activeTab, setActiveTab] = useState<'chat' | 'music' | 'watch'>('chat');
+  const [peerParticipantId, setPeerParticipantId] =
+    useState<string | null>(null);
+
+  const [activeTab, setActiveTab] =
+    useState<'chat' | 'music' | 'watch'>('chat');
+
   const [cameraOn, setCameraOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
   const [ws, setWs] = useState<WebSocket | null>(null);
-  
-  const participantId = useRef(Math.random().toString(36).substring(7));
 
-  const { localStream, remoteStream } = useWebRTC({ 
-    ws, 
-    sessionId, 
-    participantId: participantId.current, 
-    cameraOn, 
-    micOn 
+  const {
+    localStream,
+    remoteStream,
+    connectionState,
+    iceConnectionState,
+  } = useWebRTC({
+    ws,
+    sessionId,
+    participantId: participantId.current,
+    peerParticipantId,
+    cameraOn,
+    micOn,
   });
 
+  // ------------------------------------------------------------
+  // WEBSOCKET + SESSION
+  // ------------------------------------------------------------
+
   useEffect(() => {
+    if (!sessionId) return;
+
     const websocket = new WebSocket(WS_URL);
-    
-    websocket.onopen = () => {
-      websocket.send(JSON.stringify({
-        type: 'SESSION_JOIN',
-        sessionId,
-        participantId: participantId.current,
-        displayName
-      }));
+
+    const handleMessage = (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'SESSION_STATE') {
+          setConnected(true);
+
+          const state =
+            data.state as SessionState | undefined;
+
+          const participants =
+            state?.participants || {};
+
+          const peer = Object.values(participants).find(
+            (participant) =>
+              participant.participantId !==
+              participantId.current
+          );
+
+          if (peer) {
+            setPeerParticipantId(
+              peer.participantId
+            );
+          } else {
+            setPeerParticipantId(null);
+          }
+
+          return;
+        }
+
+        if (
+          data.type === 'PEER_JOINED' &&
+          data.participantId &&
+          data.participantId !==
+          participantId.current
+        ) {
+          setPeerParticipantId(
+            data.participantId
+          );
+
+          return;
+        }
+
+        if (
+          data.type === 'PEER_LEFT' &&
+          data.participantId
+        ) {
+          setPeerParticipantId(
+            (current) =>
+              current === data.participantId
+                ? null
+                : current
+          );
+
+          return;
+        }
+
+        if (data.type === 'ERROR') {
+          alert(data.message);
+          navigate('/');
+        }
+      } catch (error) {
+        console.error(
+          '[ROOM] Invalid WebSocket message:',
+          error
+        );
+      }
     };
 
-    websocket.addEventListener('message', (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'SESSION_STATE') {
-        setConnected(true);
-      } else if (data.type === 'ERROR') {
-        alert(data.message);
-        navigate('/');
-      }
-    });
+    websocket.addEventListener(
+      'message',
+      handleMessage
+    );
 
+    websocket.onopen = () => {
+      console.log('[ROOM] WebSocket connected');
+
+      websocket.send(
+        JSON.stringify({
+          type: 'SESSION_JOIN',
+          sessionId,
+          participantId:
+            participantId.current,
+          displayName,
+        })
+      );
+    };
+
+    websocket.onerror = (error) => {
+      console.error(
+        '[ROOM] WebSocket error:',
+        error
+      );
+    };
+
+    websocket.onclose = () => {
+      console.log('[ROOM] WebSocket closed');
+      setConnected(false);
+      setPeerParticipantId(null);
+    };
+
+    // Set it immediately so the WebRTC hook can attach
+    // before the socket receives SESSION_STATE/PEER_JOINED.
     setWs(websocket);
 
     return () => {
+      websocket.removeEventListener(
+        'message',
+        handleMessage
+      );
+
       websocket.close();
+
+      setWs(null);
+      setPeerParticipantId(null);
+      setConnected(false);
     };
   }, [sessionId, displayName, navigate]);
 
+  // ------------------------------------------------------------
+  // VIDEO STATUS
+  // ------------------------------------------------------------
+
+  const videoStatus =
+    connectionState === 'connected'
+      ? 'Video connected'
+      : connectionState === 'connecting'
+        ? 'Connecting video...'
+        : connectionState === 'failed'
+          ? 'Video connection failed'
+          : peerParticipantId
+            ? 'Connecting video...'
+            : 'Waiting for your person...';
+
   return (
     <div className="h-[100dvh] w-full flex flex-col md:flex-row overflow-hidden">
-      {/* LEFT: Video Area */}
+      {/* LEFT: VIDEO */}
       <div className="flex-1 relative flex flex-col">
-        
-        {/* Header */}
+        {/* HEADER */}
         <div className="absolute top-0 left-0 right-0 p-6 z-20 flex justify-between items-center bg-gradient-to-b from-black/60 to-transparent">
-          <h1 className="text-xl font-serif font-bold tracking-widest text-white/90 drop-shadow-md">AARZOO</h1>
+          <h1 className="text-xl font-serif font-bold tracking-widest text-white/90 drop-shadow-md">
+            AARZOO
+          </h1>
+
           <div className="flex items-center space-x-2 bg-black/40 px-3 py-1.5 rounded-full backdrop-blur-sm">
-            <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'}`} />
+            <div
+              className={`w-2 h-2 rounded-full ${connected
+                  ? 'bg-green-500'
+                  : 'bg-yellow-500 animate-pulse'
+                }`}
+            />
+
             <span className="text-sm text-gray-300 font-medium">
-              {connected ? 'Connected' : 'Connecting...'}
+              {connected
+                ? 'Connected'
+                : 'Connecting...'}
             </span>
           </div>
         </div>
 
-        {/* Remote Video */}
+        {/* REMOTE VIDEO */}
         <div className="flex-1 w-full h-full relative flex items-center justify-center overflow-hidden">
           {remoteStream ? (
-            <VideoPlayer stream={remoteStream} className="w-full h-full" />
+            <VideoPlayer
+              stream={remoteStream}
+              className="w-full h-full"
+            />
           ) : (
-            <div className="text-gray-500 flex flex-col items-center">
+            <div className="text-gray-500 flex flex-col items-center text-center">
               <VideoOff className="w-12 h-12 mb-4 opacity-30" />
-              <p className="text-lg font-light text-gray-400">Waiting for your person...</p>
+
+              <p className="text-lg font-light text-gray-400">
+                {videoStatus}
+              </p>
+
+              {peerParticipantId &&
+                connectionState !==
+                'connected' && (
+                  <p className="text-xs text-gray-500 mt-2">
+                    ICE: {iceConnectionState}
+                  </p>
+                )}
             </div>
           )}
         </div>
 
-        {/* Local Video (Floating) */}
+        {/* LOCAL VIDEO */}
         <div className="absolute bottom-40 md:bottom-28 right-6 w-24 h-36 md:w-40 md:h-60 bg-gray-800 rounded-2xl overflow-hidden shadow-2xl border border-white/20 flex items-center justify-center z-20 transition-all hover:scale-105">
           {localStream && cameraOn ? (
-            <VideoPlayer stream={localStream} muted={true} className="w-full h-full transform -scale-x-100" />
+            <VideoPlayer
+              stream={localStream}
+              muted
+              className="w-full h-full transform -scale-x-100"
+            />
           ) : (
-             <span className="text-gray-500 text-xs flex flex-col items-center">
-               <VideoOff className="w-4 h-4 mb-1" />
-               Camera Off
-             </span>
+            <span className="text-gray-500 text-xs flex flex-col items-center">
+              <VideoOff className="w-4 h-4 mb-1" />
+              Camera Off
+            </span>
           )}
         </div>
 
-        {/* Floating Music Player */}
-        <MusicPlayer ws={ws} sessionId={sessionId} />
+        {/* MUSIC PLAYER */}
+        <MusicPlayer
+          ws={ws}
+          sessionId={sessionId}
+        />
 
-        {/* Bottom Controls */}
+        {/* CONTROLS */}
         <div className="absolute bottom-0 left-0 right-0 p-6 flex justify-center items-center space-x-6 bg-gradient-to-t from-black/80 to-transparent z-20">
-          <button 
+          <button
             onClick={() => setMicOn(!micOn)}
-            className={`p-4 rounded-full backdrop-blur-md transition-all ${micOn ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-red-500/90 hover:bg-red-500 text-white'}`}
+            className={`p-4 rounded-full backdrop-blur-md transition-all ${micOn
+                ? 'bg-white/10 hover:bg-white/20 text-white'
+                : 'bg-red-500/90 hover:bg-red-500 text-white'
+              }`}
           >
-            {micOn ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
-          </button>
-          
-          <button 
-            onClick={() => setCameraOn(!cameraOn)}
-            className={`p-4 rounded-full backdrop-blur-md transition-all ${cameraOn ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-red-500/90 hover:bg-red-500 text-white'}`}
-          >
-            {cameraOn ? <Video className="w-6 h-6" /> : <VideoOff className="w-6 h-6" />}
+            {micOn ? (
+              <Mic className="w-6 h-6" />
+            ) : (
+              <MicOff className="w-6 h-6" />
+            )}
           </button>
 
-          <button 
+          <button
+            onClick={() =>
+              setCameraOn(!cameraOn)
+            }
+            className={`p-4 rounded-full backdrop-blur-md transition-all ${cameraOn
+                ? 'bg-white/10 hover:bg-white/20 text-white'
+                : 'bg-red-500/90 hover:bg-red-500 text-white'
+              }`}
+          >
+            {cameraOn ? (
+              <Video className="w-6 h-6" />
+            ) : (
+              <VideoOff className="w-6 h-6" />
+            )}
+          </button>
+
+          <button
             onClick={() => navigate('/')}
             className="p-4 rounded-full bg-red-600 hover:bg-red-700 transition-all hover:scale-105 text-white"
             title="Leave Aarzoo"
@@ -129,45 +323,79 @@ export default function MainRoom() {
         </div>
       </div>
 
-      {/* RIGHT: Interaction Panel */}
+      {/* RIGHT PANEL */}
       <div className="w-full md:w-96 flex flex-col glass-panel h-[50dvh] md:h-[100dvh] border-0 md:border-l border-white/20 z-10">
-        {/* Tabs */}
         <div className="flex border-b border-white/10 p-2 shrink-0">
-          <button 
-            onClick={() => setActiveTab('chat')}
-            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg transition-colors ${activeTab === 'chat' ? 'bg-white/10 text-white shadow-sm' : 'text-gray-400 hover:bg-white/5'}`}
+          <button
+            onClick={() =>
+              setActiveTab('chat')
+            }
+            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg transition-colors ${activeTab === 'chat'
+                ? 'bg-white/10 text-white shadow-sm'
+                : 'text-gray-400 hover:bg-white/5'
+              }`}
           >
             <MessageCircle className="w-4 h-4" />
-            <span className="text-sm font-medium">Chat</span>
+            <span className="text-sm font-medium">
+              Chat
+            </span>
           </button>
-          <button 
-            onClick={() => setActiveTab('music')}
-            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg transition-colors ${activeTab === 'music' ? 'bg-white/10 text-white shadow-sm' : 'text-gray-400 hover:bg-white/5'}`}
+
+          <button
+            onClick={() =>
+              setActiveTab('music')
+            }
+            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg transition-colors ${activeTab === 'music'
+                ? 'bg-white/10 text-white shadow-sm'
+                : 'text-gray-400 hover:bg-white/5'
+              }`}
           >
             <Music className="w-4 h-4" />
-            <span className="text-sm font-medium">Music</span>
+            <span className="text-sm font-medium">
+              Music
+            </span>
           </button>
-          <button 
-            onClick={() => setActiveTab('watch')}
-            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg transition-colors ${activeTab === 'watch' ? 'bg-white/10 text-white shadow-sm' : 'text-gray-400 hover:bg-white/5'}`}
+
+          <button
+            onClick={() =>
+              setActiveTab('watch')
+            }
+            className={`flex-1 py-3 flex justify-center items-center space-x-2 rounded-lg transition-colors ${activeTab === 'watch'
+                ? 'bg-white/10 text-white shadow-sm'
+                : 'text-gray-400 hover:bg-white/5'
+              }`}
           >
             <Film className="w-4 h-4" />
-            <span className="text-sm font-medium">Watch</span>
+            <span className="text-sm font-medium">
+              Watch
+            </span>
           </button>
         </div>
 
-        {/* Panel Content */}
         <div className="flex-1 overflow-hidden flex flex-col relative">
           {activeTab === 'chat' && (
-            <ChatPanel ws={ws} sessionId={sessionId} participantId={participantId.current} />
+            <ChatPanel
+              ws={ws}
+              sessionId={sessionId}
+              participantId={
+                participantId.current
+              }
+            />
           )}
+
           {activeTab === 'music' && (
-            <MusicPanel ws={ws} sessionId={sessionId} />
+            <MusicPanel
+              ws={ws}
+              sessionId={sessionId}
+            />
           )}
+
           {activeTab === 'watch' && (
-             <div className="h-full flex items-center justify-center text-center text-gray-500 p-8">
-               <p className="text-sm">Watch together coming soon...</p>
-             </div>
+            <div className="h-full flex items-center justify-center text-center text-gray-500 p-8">
+              <p className="text-sm">
+                Watch together coming soon...
+              </p>
+            </div>
           )}
         </div>
       </div>
