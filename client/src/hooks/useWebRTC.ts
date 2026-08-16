@@ -32,6 +32,10 @@ export function useWebRTC({
   cameraOn,
   micOn,
 }: WebRTCProps) {
+  // ============================================================
+  // STATE
+  // ============================================================
+
   const [localStream, setLocalStream] =
     useState<MediaStream | null>(null);
 
@@ -44,6 +48,10 @@ export function useWebRTC({
   const [iceConnectionState, setIceConnectionState] =
     useState<RTCIceConnectionState>('new');
 
+  // ============================================================
+  // REFS
+  // ============================================================
+
   const peerConnection =
     useRef<RTCPeerConnection | null>(null);
 
@@ -51,13 +59,24 @@ export function useWebRTC({
     useRef<RTCIceCandidateInit[]>([]);
 
   /*
-   * IMPORTANT:
-   *
-   * WebSocket messages can arrive before the RTCPeerConnection
-   * exists. We therefore keep them here instead of losing them.
+   * Signals that arrive before the PeerConnection exists.
    */
   const pendingSignals =
     useRef<SignalMessage[]>([]);
+
+  /*
+   * IMPORTANT FIX:
+   *
+   * The signaling listener exists independently from the
+   * PeerConnection effect.
+   *
+   * Once the PeerConnection exists, this ref points to the
+   * actual signal processor.
+   */
+  const processSignalRef =
+    useRef<
+      ((data: SignalMessage) => Promise<void>) | null
+    >(null);
 
   const remoteStreamRef =
     useRef<MediaStream | null>(null);
@@ -74,6 +93,7 @@ export function useWebRTC({
   const peerIdRef =
     useRef<string | null>(peerParticipantId);
 
+  // Keep latest peer ID available.
   useEffect(() => {
     peerIdRef.current = peerParticipantId;
   }, [peerParticipantId]);
@@ -88,7 +108,9 @@ export function useWebRTC({
 
     const startMedia = async () => {
       try {
-        console.log('[WEBRTC] Requesting camera + microphone');
+        console.log(
+          '[WEBRTC] Requesting camera + microphone'
+        );
 
         stream =
           await navigator.mediaDevices.getUserMedia({
@@ -111,15 +133,17 @@ export function useWebRTC({
         stream
           .getVideoTracks()
           .forEach(
-            (track) =>
-              (track.enabled = cameraOn)
+            (track) => {
+              track.enabled = cameraOn;
+            }
           );
 
         stream
           .getAudioTracks()
           .forEach(
-            (track) =>
-              (track.enabled = micOn)
+            (track) => {
+              track.enabled = micOn;
+            }
           );
 
         setLocalStream(stream);
@@ -155,24 +179,28 @@ export function useWebRTC({
   }, []);
 
   // ============================================================
-  // CAMERA / MIC ENABLE / DISABLE
+  // CAMERA / MICROPHONE ENABLE / DISABLE
   // ============================================================
 
   useEffect(() => {
-    if (!localStream) return;
+    if (!localStream) {
+      return;
+    }
 
     localStream
       .getVideoTracks()
       .forEach(
-        (track) =>
-          (track.enabled = cameraOn)
+        (track) => {
+          track.enabled = cameraOn;
+        }
       );
 
     localStream
       .getAudioTracks()
       .forEach(
-        (track) =>
-          (track.enabled = micOn)
+        (track) => {
+          track.enabled = micOn;
+        }
       );
   }, [
     localStream,
@@ -183,15 +211,23 @@ export function useWebRTC({
   // ============================================================
   // SIGNALING LISTENER
   //
-  // THIS LISTENER IS CREATED AS SOON AS WS EXISTS.
+  // IMPORTANT:
   //
-  // It does NOT wait for peerParticipantId.
+  // This listener is created as soon as the WebSocket exists.
   //
-  // This prevents OFFER / ANSWER / ICE messages from being lost.
+  // If PeerConnection already exists:
+  //     process signal immediately
+  //
+  // If PeerConnection doesn't exist:
+  //     queue signal
+  //
+  // This fixes the original bug.
   // ============================================================
 
   useEffect(() => {
-    if (!ws || !sessionId) return;
+    if (!ws || !sessionId) {
+      return;
+    }
 
     const handleMessage = (
       event: MessageEvent
@@ -202,6 +238,10 @@ export function useWebRTC({
             event.data
           ) as SignalMessage;
 
+        // ------------------------------------------------------
+        // SESSION FILTER
+        // ------------------------------------------------------
+
         if (
           data.sessionId &&
           data.sessionId !== sessionId
@@ -209,12 +249,20 @@ export function useWebRTC({
           return;
         }
 
+        // ------------------------------------------------------
+        // IGNORE OUR OWN SIGNALS
+        // ------------------------------------------------------
+
         if (
           data.participantId &&
           data.participantId === participantId
         ) {
           return;
         }
+
+        // ------------------------------------------------------
+        // ONLY WEBRTC SIGNALS
+        // ------------------------------------------------------
 
         if (
           data.type !== 'WEBRTC_OFFER' &&
@@ -230,15 +278,39 @@ export function useWebRTC({
           data.type
         );
 
-        /*
-         * DO NOT PROCESS IT HERE.
-         *
-         * The PeerConnection may not exist yet.
-         *
-         * Queue it.
-         */
-        pendingSignals.current.push(data);
+        // ======================================================
+        // IMPORTANT FIX
+        // ======================================================
 
+        /*
+         * If the PeerConnection already exists, process the
+         * signal immediately.
+         */
+
+        if (processSignalRef.current) {
+          console.log(
+            '[WEBRTC] Processing signal immediately:',
+            data.type
+          );
+
+          void processSignalRef.current(data);
+
+          return;
+        }
+
+        /*
+         * Otherwise queue it.
+         *
+         * This can happen when OFFER arrives before the local
+         * media / PeerConnection has finished initializing.
+         */
+
+        console.log(
+          '[WEBRTC] PeerConnection not ready. Queueing:',
+          data.type
+        );
+
+        pendingSignals.current.push(data);
       } catch (error) {
         console.error(
           '[WEBRTC] Failed to parse signaling message:',
@@ -283,12 +355,10 @@ export function useWebRTC({
       peerParticipantId
     );
 
-    /*
-     * TURN credentials must exist in the Vercel build.
-     *
-     * Vite only exposes variables prefixed with VITE_ to
-     * client-side code.
-     */
+    // ==========================================================
+    // CHECK TURN CREDENTIALS
+    // ==========================================================
+
     if (
       !TURN_USERNAME ||
       !TURN_CREDENTIAL
@@ -298,9 +368,13 @@ export function useWebRTC({
       );
 
       console.error(
-        '[WEBRTC] Required:',
-        'VITE_TURN_USERNAME',
-        'VITE_TURN_CREDENTIAL'
+        '[WEBRTC] Required environment variables:',
+        {
+          VITE_TURN_USERNAME:
+            Boolean(TURN_USERNAME),
+          VITE_TURN_CREDENTIAL:
+            Boolean(TURN_CREDENTIAL),
+        }
       );
 
       return;
@@ -313,11 +387,10 @@ export function useWebRTC({
     const pc =
       new RTCPeerConnection({
         /*
-         * VERY IMPORTANT:
+         * TURN ONLY.
          *
-         * relay = TURN only.
-         *
-         * Direct / same-WiFi ICE candidates are not selected.
+         * This intentionally prevents direct peer-to-peer
+         * candidate selection, including same-WiFi connections.
          */
         iceTransportPolicy: 'relay',
 
@@ -337,6 +410,7 @@ export function useWebRTC({
 
     peerConnection.current = pc;
 
+    // Reset state for this connection.
     pendingCandidates.current = [];
 
     remoteStreamRef.current = null;
@@ -347,9 +421,33 @@ export function useWebRTC({
 
     ignoreOffer.current = false;
 
+    setRemoteStream(null);
+
+    setConnectionState(
+      'new'
+    );
+
+    setIceConnectionState(
+      'new'
+    );
+
+    // ==========================================================
+    // DETERMINISTIC INITIATOR
+    //
+    // Smaller participant ID creates the offer.
+    //
+    // Larger participant ID answers.
+    // ==========================================================
+
     const isInitiator =
       participantId <
       peerParticipantId;
+
+    /*
+     * Polite peer is the larger ID.
+     *
+     * If simultaneous offers happen, polite peer rolls back.
+     */
 
     const isPolite =
       participantId >
@@ -407,7 +505,7 @@ export function useWebRTC({
     };
 
     // ==========================================================
-    // LOCAL TRACKS
+    // ADD LOCAL TRACKS
     // ==========================================================
 
     localStream
@@ -423,6 +521,7 @@ export function useWebRTC({
           {
             kind: track.kind,
             id: track.id,
+            enabled: track.enabled,
           }
         );
       });
@@ -431,7 +530,9 @@ export function useWebRTC({
     // REMOTE TRACK
     // ==========================================================
 
-    pc.ontrack = (event) => {
+    pc.ontrack = (
+      event
+    ) => {
       console.log(
         '[WEBRTC] REMOTE TRACK RECEIVED:',
         {
@@ -441,6 +542,10 @@ export function useWebRTC({
             event.streams.length,
         }
       );
+
+      // --------------------------------------------------------
+      // Normal case: browser gives us a MediaStream.
+      // --------------------------------------------------------
 
       if (
         event.streams &&
@@ -453,8 +558,26 @@ export function useWebRTC({
           event.streams[0]
         );
 
+        console.log(
+          '[WEBRTC] Remote stream attached:',
+          {
+            videoTracks:
+              event.streams[0]
+                .getVideoTracks()
+                .length,
+            audioTracks:
+              event.streams[0]
+                .getAudioTracks()
+                .length,
+          }
+        );
+
         return;
       }
+
+      // --------------------------------------------------------
+      // Fallback: construct our own MediaStream.
+      // --------------------------------------------------------
 
       if (
         !remoteStreamRef.current
@@ -502,14 +625,11 @@ export function useWebRTC({
         '[WEBRTC] Local ICE candidate:',
         {
           type:
-            event.candidate
-              .type,
+            event.candidate.type,
           protocol:
-            event.candidate
-              .protocol,
+            event.candidate.protocol,
           address:
-            event.candidate
-              .address,
+            event.candidate.address,
           port:
             event.candidate.port,
         }
@@ -525,7 +645,7 @@ export function useWebRTC({
     };
 
     // ==========================================================
-    // ICE ERRORS
+    // ICE CANDIDATE ERROR
     // ==========================================================
 
     pc.onicecandidateerror = (
@@ -545,7 +665,7 @@ export function useWebRTC({
     };
 
     // ==========================================================
-    // CONNECTION STATES
+    // ICE CONNECTION STATE
     // ==========================================================
 
     pc.oniceconnectionstatechange =
@@ -560,6 +680,10 @@ export function useWebRTC({
         );
       };
 
+    // ==========================================================
+    // PEER CONNECTION STATE
+    // ==========================================================
+
     pc.onconnectionstatechange =
       () => {
         console.log(
@@ -572,6 +696,10 @@ export function useWebRTC({
         );
       };
 
+    // ==========================================================
+    // SIGNALING STATE
+    // ==========================================================
+
     pc.onsignalingstatechange =
       () => {
         console.log(
@@ -579,6 +707,10 @@ export function useWebRTC({
           pc.signalingState
         );
       };
+
+    // ==========================================================
+    // ICE GATHERING STATE
+    // ==========================================================
 
     pc.onicegatheringstatechange =
       () => {
@@ -589,7 +721,7 @@ export function useWebRTC({
       };
 
     // ==========================================================
-    // FLUSH ICE
+    // FLUSH QUEUED ICE CANDIDATES
     // ==========================================================
 
     const flushCandidates =
@@ -605,6 +737,10 @@ export function useWebRTC({
             0
           );
 
+        if (queued.length === 0) {
+          return;
+        }
+
         console.log(
           '[WEBRTC] Flushing queued ICE:',
           queued.length
@@ -617,6 +753,10 @@ export function useWebRTC({
             await pc.addIceCandidate(
               candidate
             );
+
+            console.log(
+              '[WEBRTC] Queued ICE candidate added'
+            );
           } catch (error) {
             console.error(
               '[WEBRTC] Failed queued ICE:',
@@ -627,12 +767,7 @@ export function useWebRTC({
       };
 
     // ==========================================================
-    // CREATE OFFER
-    //
-    // IMPORTANT:
-    // We explicitly create the offer.
-    //
-    // We do NOT depend on onnegotiationneeded.
+    // CREATE INITIAL OFFER
     // ==========================================================
 
     const createInitialOffer =
@@ -648,12 +783,20 @@ export function useWebRTC({
         if (
           offerCreated.current
         ) {
+          console.log(
+            '[WEBRTC] Offer already created.'
+          );
+
           return;
         }
 
         if (
           makingOffer.current
         ) {
+          console.log(
+            '[WEBRTC] Offer creation already in progress.'
+          );
+
           return;
         }
 
@@ -670,7 +813,8 @@ export function useWebRTC({
         }
 
         try {
-          makingOffer.current = true;
+          makingOffer.current =
+            true;
 
           console.log(
             '[WEBRTC] ⭐ CREATING INITIAL OFFER'
@@ -722,15 +866,22 @@ export function useWebRTC({
 
     // ==========================================================
     // PROCESS SIGNAL
+    //
+    // THIS FUNCTION IS NOW STORED IN processSignalRef.
+    //
+    // That is the main fix.
+    //
+    // The WebSocket listener can call it immediately when the
+    // PeerConnection exists.
     // ==========================================================
 
     const processSignal =
       async (
         data: SignalMessage
       ) => {
-        // ------------------------------------------------------
+        // ======================================================
         // OFFER
-        // ------------------------------------------------------
+        // ======================================================
 
         if (
           data.type ===
@@ -752,7 +903,7 @@ export function useWebRTC({
             !isPolite
           ) {
             console.warn(
-              '[WEBRTC] Ignoring offer collision'
+              '[WEBRTC] Ignoring offer collision because peer is impolite.'
             );
 
             ignoreOffer.current =
@@ -765,6 +916,10 @@ export function useWebRTC({
             ignoreOffer.current =
               false;
 
+            // --------------------------------------------------
+            // Rollback if polite peer has an existing offer.
+            // --------------------------------------------------
+
             if (
               isPolite &&
               pc.signalingState ===
@@ -774,13 +929,15 @@ export function useWebRTC({
                 '[WEBRTC] Rolling back local offer'
               );
 
-              await pc.setLocalDescription(
-                {
-                  type:
-                    'rollback',
-                }
-              );
+              await pc.setLocalDescription({
+                type:
+                  'rollback',
+              });
             }
+
+            // --------------------------------------------------
+            // Apply remote offer.
+            // --------------------------------------------------
 
             await pc.setRemoteDescription(
               new RTCSessionDescription(
@@ -792,7 +949,16 @@ export function useWebRTC({
               '[WEBRTC] Remote OFFER applied'
             );
 
+            // --------------------------------------------------
+            // Add any ICE candidates that arrived with/before
+            // the offer.
+            // --------------------------------------------------
+
             await flushCandidates();
+
+            // --------------------------------------------------
+            // Create answer.
+            // --------------------------------------------------
 
             const answer =
               await pc.createAnswer();
@@ -809,18 +975,25 @@ export function useWebRTC({
               );
             }
 
-            sendSignal({
-              type:
-                'WEBRTC_ANSWER',
-              sessionId,
-              participantId,
-              answer:
-                pc.localDescription.toJSON(),
-            });
+            // --------------------------------------------------
+            // Send answer.
+            // --------------------------------------------------
 
-            console.log(
-              '[WEBRTC] ⭐ ANSWER SENT'
-            );
+            const sent =
+              sendSignal({
+                type:
+                  'WEBRTC_ANSWER',
+                sessionId,
+                participantId,
+                answer:
+                  pc.localDescription.toJSON(),
+              });
+
+            if (sent) {
+              console.log(
+                '[WEBRTC] ⭐ ANSWER SENT'
+              );
+            }
           } catch (error) {
             console.error(
               '[WEBRTC] OFFER PROCESSING FAILED:',
@@ -831,9 +1004,9 @@ export function useWebRTC({
           return;
         }
 
-        // ------------------------------------------------------
+        // ======================================================
         // ANSWER
-        // ------------------------------------------------------
+        // ======================================================
 
         if (
           data.type ===
@@ -846,6 +1019,22 @@ export function useWebRTC({
           );
 
           try {
+            /*
+             * Only apply an answer when we have a local offer.
+             */
+
+            if (
+              pc.signalingState !==
+              'have-local-offer'
+            ) {
+              console.warn(
+                '[WEBRTC] Ignoring ANSWER because signaling state is:',
+                pc.signalingState
+              );
+
+              return;
+            }
+
             await pc.setRemoteDescription(
               new RTCSessionDescription(
                 data.answer
@@ -867,9 +1056,9 @@ export function useWebRTC({
           return;
         }
 
-        // ------------------------------------------------------
+        // ======================================================
         // ICE
-        // ------------------------------------------------------
+        // ======================================================
 
         if (
           data.type ===
@@ -883,6 +1072,11 @@ export function useWebRTC({
           }
 
           try {
+            /*
+             * If remote SDP is already applied, add ICE
+             * immediately.
+             */
+
             if (
               pc.remoteDescription
             ) {
@@ -894,6 +1088,10 @@ export function useWebRTC({
                 '[WEBRTC] Remote ICE candidate added'
               );
             } else {
+              /*
+               * Otherwise wait until remote SDP exists.
+               */
+
               pendingCandidates.current.push(
                 data.candidate
               );
@@ -912,9 +1110,9 @@ export function useWebRTC({
           return;
         }
 
-        // ------------------------------------------------------
+        // ======================================================
         // PEER LEFT
-        // ------------------------------------------------------
+        // ======================================================
 
         if (
           data.type ===
@@ -927,12 +1125,28 @@ export function useWebRTC({
           pendingCandidates.current =
             [];
 
+          pendingSignals.current =
+            [];
+
           remoteStreamRef.current =
             null;
 
-          setRemoteStream(null);
+          setRemoteStream(
+            null
+          );
+
+          return;
         }
       };
+
+    // ==========================================================
+    // REGISTER SIGNAL PROCESSOR
+    //
+    // THIS IS THE CRITICAL FIX.
+    // ==========================================================
+
+    processSignalRef.current =
+      processSignal;
 
     // ==========================================================
     // PROCESS SIGNALS THAT ARRIVED BEFORE PC EXISTED
@@ -952,6 +1166,18 @@ export function useWebRTC({
       for (
         const signal of queuedSignals
       ) {
+        /*
+         * Process sequentially.
+         *
+         * This is important for:
+         *
+         * OFFER
+         *     ↓
+         * ANSWER
+         *     ↓
+         * ICE
+         */
+
         await processSignal(
           signal
         );
@@ -961,12 +1187,14 @@ export function useWebRTC({
     // ==========================================================
     // START CALL
     //
-    // Give the PC a tick to finish adding tracks before
-    // creating the offer.
+    // Give the PeerConnection one event-loop tick so that
+    // local tracks are fully registered before creating offer.
     // ==========================================================
 
     if (isInitiator) {
-      void createInitialOffer();
+      setTimeout(() => {
+        void createInitialOffer();
+      }, 0);
     }
 
     // ==========================================================
@@ -977,6 +1205,19 @@ export function useWebRTC({
       console.log(
         '[WEBRTC] Cleaning up PeerConnection'
       );
+
+      /*
+       * Only clear processSignalRef if it still points to
+       * THIS PeerConnection's processor.
+       */
+
+      if (
+        processSignalRef.current ===
+        processSignal
+      ) {
+        processSignalRef.current =
+          null;
+      }
 
       pendingCandidates.current =
         [];
@@ -993,7 +1234,9 @@ export function useWebRTC({
       remoteStreamRef.current =
         null;
 
-      setRemoteStream(null);
+      setRemoteStream(
+        null
+      );
 
       try {
         pc.close();
@@ -1016,6 +1259,10 @@ export function useWebRTC({
     peerParticipantId,
     localStream,
   ]);
+
+  // ============================================================
+  // RETURN
+  // ============================================================
 
   return {
     localStream,
