@@ -1,40 +1,102 @@
 import express from 'express';
 import http from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
+import {
+  WebSocketServer,
+  WebSocket,
+} from 'ws';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { sessionManager } from './session/SessionManager';
+
+import {
+  sessionManager,
+} from './session/SessionManager';
 
 dotenv.config();
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+// ============================================================
+// EXPRESS
+// ============================================================
 
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
-const PORT = process.env.PORT || 3001;
+const app =
+  express();
 
-app.post('/api/sessions', (_req, res) => {
-  const sessionId = sessionManager.createSession();
-  res.json({ sessionId });
-});
+app.use(
+  cors()
+);
 
-app.get('/api/sessions/:sessionId', (req, res) => {
-  const session = sessionManager.getSession(req.params.sessionId);
+app.use(
+  express.json()
+);
 
-  if (!session) {
-    return res.status(404).json({
-      error: 'Session not found or expired',
+// ============================================================
+// HTTP SERVER
+// ============================================================
+
+const server =
+  http.createServer(app);
+
+// ============================================================
+// WEBSOCKET SERVER
+// ============================================================
+
+const wss =
+  new WebSocketServer({
+    server,
+  });
+
+const PORT =
+  process.env.PORT ||
+  3001;
+
+// ============================================================
+// HTTP ROUTES
+// ============================================================
+
+app.post(
+  '/api/sessions',
+  (_req, res) => {
+    const sessionId =
+      sessionManager.createSession();
+
+    res.json({
+      sessionId,
     });
   }
+);
 
-  res.json({
-    sessionId: session.sessionId,
-    status: session.status,
-    participantCount: Object.keys(session.participants).length,
-  });
-});
+app.get(
+  '/api/sessions/:sessionId',
+  (req, res) => {
+    const session =
+      sessionManager.getSession(
+        req.params.sessionId
+      );
+
+    if (!session) {
+      return res.status(404).json({
+        error:
+          'Session not found or expired',
+      });
+    }
+
+    res.json({
+      sessionId:
+        session.sessionId,
+
+      status:
+        session.status,
+
+      participantCount:
+        Object.keys(
+          session.participants
+        ).length,
+    });
+  }
+);
+
+// ============================================================
+// CLIENT STATE
+// ============================================================
 
 interface ClientState {
   ws: WebSocket;
@@ -42,49 +104,132 @@ interface ClientState {
   participantId?: string;
 }
 
-const clients = new Map<WebSocket, ClientState>();
+const clients =
+  new Map<
+    WebSocket,
+    ClientState
+  >();
 
-wss.on('connection', (ws) => {
-  clients.set(ws, { ws });
+// ============================================================
+// WEBSOCKET CONNECTION
+// ============================================================
 
-  ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message.toString());
-      handleWebSocketMessage(ws, data);
-    } catch (error) {
-      console.error('Invalid WebSocket message:', error);
-    }
-  });
+wss.on(
+  'connection',
+  (ws) => {
+    console.log(
+      '[WS] Client connected'
+    );
 
-  ws.on('close', () => {
-    const client = clients.get(ws);
+    clients.set(
+      ws,
+      {
+        ws,
+      }
+    );
 
-    if (
-      client?.sessionId &&
-      client.participantId
-    ) {
-      const { sessionId, participantId } =
-        client;
+    // --------------------------------------------------------
+    // MESSAGE
+    // --------------------------------------------------------
 
-      sessionManager.leaveSession(
-        sessionId,
-        participantId
-      );
+    ws.on(
+      'message',
+      (message) => {
+        try {
+          const data =
+            JSON.parse(
+              message.toString()
+            );
 
-      broadcastToSession(
-        sessionId,
-        {
-          type: 'PEER_LEFT',
-          sessionId,
-          participantId,
-        },
-        ws
-      );
-    }
+          console.log(
+            '[WS] MESSAGE:',
+            data.type
+          );
 
-    clients.delete(ws);
-  });
-});
+          handleWebSocketMessage(
+            ws,
+            data
+          );
+        } catch (error) {
+          console.error(
+            '[WS] Invalid WebSocket message:',
+            error
+          );
+        }
+      }
+    );
+
+    // --------------------------------------------------------
+    // CLOSE
+    // --------------------------------------------------------
+
+    ws.on(
+      'close',
+      () => {
+        const client =
+          clients.get(ws);
+
+        if (
+          client?.sessionId &&
+          client.participantId
+        ) {
+          const {
+            sessionId,
+            participantId,
+          } = client;
+
+          console.log(
+            '[WS] Client left:',
+            {
+              sessionId,
+              participantId,
+            }
+          );
+
+          sessionManager.leaveSession(
+            sessionId,
+            participantId
+          );
+
+          broadcastToSession(
+            sessionId,
+            {
+              type:
+                'PEER_LEFT',
+
+              sessionId,
+
+              participantId,
+            },
+            ws
+          );
+        }
+
+        clients.delete(
+          ws
+        );
+      }
+    );
+
+    // --------------------------------------------------------
+    // ERROR
+    // --------------------------------------------------------
+
+    ws.on(
+      'error',
+      (error) => {
+        console.error(
+          '[WS] Socket error:',
+          error
+        );
+      }
+    );
+  }
+);
+
+// ============================================================
+// MESSAGE HANDLER
+// ============================================================
 
 function handleWebSocketMessage(
   ws: WebSocket,
@@ -96,24 +241,67 @@ function handleWebSocketMessage(
     participantId,
   } = data;
 
-  if (!sessionId || !participantId) {
+  // ----------------------------------------------------------
+  // VALIDATE
+  // ----------------------------------------------------------
+
+  if (
+    !sessionId ||
+    !participantId
+  ) {
+    console.warn(
+      '[WS] Message missing sessionId or participantId:',
+      data
+    );
+
     return;
   }
 
-  const client = clients.get(ws);
+  // ----------------------------------------------------------
+  // UPDATE CLIENT STATE
+  // ----------------------------------------------------------
+
+  const client =
+    clients.get(ws);
 
   if (client) {
-    client.sessionId = sessionId;
+    client.sessionId =
+      sessionId;
+
     client.participantId =
       participantId;
   }
+
+  // ----------------------------------------------------------
+  // ACTIVITY
+  // ----------------------------------------------------------
 
   sessionManager.updateActivity(
     sessionId
   );
 
+  // ==========================================================
+  // SWITCH
+  // ==========================================================
+
   switch (type) {
+
+    // ========================================================
+    // SESSION JOIN
+    // ========================================================
+
     case 'SESSION_JOIN': {
+
+      console.log(
+        '[WS] SESSION_JOIN:',
+        {
+          sessionId,
+          participantId,
+          displayName:
+            data.displayName,
+        }
+      );
+
       const success =
         sessionManager.joinSession(
           sessionId,
@@ -122,15 +310,19 @@ function handleWebSocketMessage(
         );
 
       if (!success) {
+
         ws.send(
           JSON.stringify({
-            type: 'ERROR',
+            type:
+              'ERROR',
+
             message:
               'Session full or invalid',
           })
         );
 
         ws.close();
+
         return;
       }
 
@@ -139,84 +331,207 @@ function handleWebSocketMessage(
           sessionId
         );
 
+      if (!session) {
+        ws.send(
+          JSON.stringify({
+            type:
+              'ERROR',
+
+            message:
+              'Session not found',
+          })
+        );
+
+        return;
+      }
+
+      // ------------------------------------------------------
+      // SEND CURRENT SESSION TO JOINER
+      // ------------------------------------------------------
+
       ws.send(
         JSON.stringify({
-          type: 'SESSION_STATE',
+          type:
+            'SESSION_STATE',
+
           sessionId,
-          state: session,
+
+          state:
+            session,
         })
       );
 
-      /*
-       * IMPORTANT:
-       * Notify both clients that this participant
-       * joined. Each client ignores its own message.
-       *
-       * This removes the old asymmetry where only the
-       * already-connected participant received PEER_JOINED.
-       */
-      broadcastToSession(sessionId, {
-        type: 'PEER_JOINED',
+      console.log(
+        '[WS] SESSION_STATE sent:',
+        {
+          sessionId,
+
+          participantCount:
+            Object.keys(
+              session.participants
+            ).length,
+        }
+      );
+
+      // ------------------------------------------------------
+      // NOTIFY BOTH PARTICIPANTS
+      // ------------------------------------------------------
+
+      broadcastToSession(
         sessionId,
-        participantId,
-        displayName:
-          data.displayName,
-      });
+        {
+          type:
+            'PEER_JOINED',
+
+          sessionId,
+
+          participantId,
+
+          displayName:
+            data.displayName,
+        }
+      );
 
       break;
     }
 
-    case 'WEBRTC_OFFER':
-    case 'WEBRTC_ANSWER':
-    case 'WEBRTC_ICE':
+    // ========================================================
+    // WEBRTC OFFER
+    // ========================================================
+
+    case 'WEBRTC_OFFER': {
+
+      console.log(
+        '[WS] WEBRTC_OFFER:',
+        {
+          sessionId,
+          from:
+            participantId,
+        }
+      );
+
       broadcastToSession(
         sessionId,
         data,
         ws
       );
+
       break;
+    }
+
+    // ========================================================
+    // WEBRTC ANSWER
+    // ========================================================
+
+    case 'WEBRTC_ANSWER': {
+
+      console.log(
+        '[WS] WEBRTC_ANSWER:',
+        {
+          sessionId,
+          from:
+            participantId,
+        }
+      );
+
+      broadcastToSession(
+        sessionId,
+        data,
+        ws
+      );
+
+      break;
+    }
+
+    // ========================================================
+    // WEBRTC ICE
+    // ========================================================
+
+    case 'WEBRTC_ICE': {
+
+      console.log(
+        '[WS] WEBRTC_ICE:',
+        {
+          sessionId,
+          from:
+            participantId,
+        }
+      );
+
+      broadcastToSession(
+        sessionId,
+        data,
+        ws
+      );
+
+      break;
+    }
+
+    // ========================================================
+    // CHAT
+    // ========================================================
 
     case 'CHAT_MESSAGE':
+
     case 'CHAT_TYPING':
-    case 'CHAT_STOP_TYPING':
+
+    case 'CHAT_STOP_TYPING': {
+
       broadcastToSession(
         sessionId,
         data,
         ws
       );
+
       break;
+    }
+
+    // ========================================================
+    // MUSIC
+    // ========================================================
 
     case 'MUSIC_PLAY':
+
     case 'MUSIC_PAUSE':
+
     case 'MUSIC_SEEK':
+
     case 'MUSIC_TRACK_CHANGE': {
+
       const session =
         sessionManager.getSession(
           sessionId
         );
 
       if (session) {
+
         if (
-          type === 'MUSIC_PLAY'
+          type ===
+          'MUSIC_PLAY'
         ) {
-          session.isPlaying = true;
+          session.isPlaying =
+            true;
         }
 
         if (
-          type === 'MUSIC_PAUSE'
+          type ===
+          'MUSIC_PAUSE'
         ) {
-          session.isPlaying = false;
+          session.isPlaying =
+            false;
         }
 
         if (
-          data.position !== undefined
+          data.position !==
+          undefined
         ) {
           session.playbackPosition =
             data.position;
         }
 
         if (
-          data.trackId !== undefined
+          data.trackId !==
+          undefined
         ) {
           session.currentTrack =
             data.trackId;
@@ -235,10 +550,25 @@ function handleWebSocketMessage(
       break;
     }
 
-    default:
+    // ========================================================
+    // UNKNOWN
+    // ========================================================
+
+    default: {
+
+      console.warn(
+        '[WS] Unknown message type:',
+        type
+      );
+
       break;
+    }
   }
 }
+
+// ============================================================
+// BROADCAST
+// ============================================================
 
 function broadcastToSession(
   sessionId: string,
@@ -246,24 +576,52 @@ function broadcastToSession(
   excludeWs?: WebSocket
 ) {
   for (
-    const [ws, client] of clients.entries()
+    const [
+      ws,
+      client,
+    ] of clients.entries()
   ) {
+
     if (
       client.sessionId ===
       sessionId &&
-      ws !== excludeWs &&
+
+      ws !==
+      excludeWs &&
+
       ws.readyState ===
       WebSocket.OPEN
     ) {
-      ws.send(
-        JSON.stringify(message)
-      );
+
+      try {
+
+        ws.send(
+          JSON.stringify(
+            message
+          )
+        );
+
+      } catch (error) {
+
+        console.error(
+          '[WS] Broadcast failed:',
+          error
+        );
+
+      }
     }
   }
 }
 
-server.listen(PORT, () => {
-  console.log(
-    `Server listening on port ${PORT}`
-  );
-});
+// ============================================================
+// SERVER START
+// ============================================================
+
+server.listen(
+  PORT,
+  () => {
+    console.log(
+      `Server listening on port ${PORT}`
+    );
+  }
+);
