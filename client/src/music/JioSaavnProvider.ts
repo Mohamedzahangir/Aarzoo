@@ -3,7 +3,6 @@ import type { MusicProvider, Song } from './MusicProvider';
 const API_BASE = 'https://saavn-api.vercel.app';
 
 export class JioSaavnProvider implements MusicProvider {
-
   async search(query: string): Promise<Song[]> {
     const searchQuery = query.trim();
 
@@ -24,7 +23,7 @@ export class JioSaavnProvider implements MusicProvider {
         );
       }
 
-      const data = await response.json();
+      const data: unknown = await response.json();
 
       console.log('[MUSIC] API response:', data);
 
@@ -39,61 +38,120 @@ export class JioSaavnProvider implements MusicProvider {
             return null;
           }
 
+          const streamUrl = String(item.url ?? '').trim();
+
+          if (!streamUrl) {
+            return null;
+          }
+
           return {
             id: String(item.id),
 
             title: String(
-              item.title ||
-              item.name ||
+              item.title ??
+              item.name ??
               'Unknown Song'
             ),
 
             artist: String(
-              item.artists ||
-              item.subtitle ||
+              item.artists ??
+              item.subtitle ??
               'Unknown Artist'
             ),
 
             album: String(
-              item.album ||
+              item.album ??
               ''
             ),
 
             artwork: String(
-              item.image ||
+              item.image ??
               ''
             ),
 
-            duration: Number(
-              item.duration || 0
-            ),
+            duration: Number(item.duration) || 0,
 
-            streamUrl: String(
-              item.url ||
-              ''
-            )
+            streamUrl
           };
         })
         .filter(
-          (song): song is Song =>
-            song !== null && song.streamUrl.length > 0
+          (song): song is Song => song !== null
         );
 
-      console.log('[MUSIC] Songs found:', songs);
+      console.log('[MUSIC] Songs found:', songs.length);
 
       return songs;
-
     } catch (error) {
       console.error('[MUSIC] Search failed:', error);
-
       return [];
     }
   }
 
   async getSong(id: string): Promise<Song | null> {
-    // We already receive the complete Song object from search().
-    // No additional request is required for the current Aarzoo music flow.
-    return null;
+    const songId = id.trim();
+
+    if (!songId) {
+      return null;
+    }
+
+    try {
+      const url = `${API_BASE}/song/${encodeURIComponent(songId)}`;
+
+      console.log('[MUSIC] Getting song:', url);
+
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        throw new Error(
+          `Music API request failed: ${response.status} ${response.statusText}`
+        );
+      }
+
+      const data: any = await response.json();
+
+      console.log('[MUSIC] Song response:', data);
+
+      const item = Array.isArray(data)
+        ? data[0]
+        : data;
+
+      if (!item || !item.id || !item.url) {
+        return null;
+      }
+
+      return {
+        id: String(item.id),
+
+        title: String(
+          item.title ??
+          item.name ??
+          'Unknown Song'
+        ),
+
+        artist: String(
+          item.artists ??
+          item.subtitle ??
+          'Unknown Artist'
+        ),
+
+        album: String(
+          item.album ??
+          ''
+        ),
+
+        artwork: String(
+          item.image ??
+          ''
+        ),
+
+        duration: Number(item.duration) || 0,
+
+        streamUrl: String(item.url)
+      };
+    } catch (error) {
+      console.error('[MUSIC] getSong failed:', error);
+      return null;
+    }
   }
 }
 
